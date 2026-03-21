@@ -11,8 +11,8 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
   volumes:
-    - ./dags:/opt/airflow/dags        # your DAG files go here
-    - ./scripts:/opt/airflow/scripts  # your pipeline scripts go here
+    - ./dags:/opt/airflow/dags        # DAG files go here
+    - ./scripts:/opt/airflow/scripts  # pipeline scripts go here
     - ./logs:/opt/airflow/logs
   depends_on:
     postgres:
@@ -84,7 +84,7 @@ services:
       - airflow-init
     restart: always
 
-  # ── Airflow: scheduler (runs your DAGs) ───────────────────────────────────
+  # ── Airflow: scheduler (runs DAGs) ───────────────────────────────────
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
