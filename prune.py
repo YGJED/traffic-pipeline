@@ -7,7 +7,7 @@ import os
 # CONFIG
 # =========================
 
-INPUT_CSV = "Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
+INPUT_CSV = "data/Davidson-2023-2024-for-NDOT-10-min-Ave/Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
 
 HIST_OUTPUT_DIR = "inrix_historical_parquet"
 STREAM_OUTPUT_DIR = "inrix_stream_parquet"
@@ -89,6 +89,22 @@ def process():
         stream_rows += len(stream_chunk)
 
         # =========================
+        # Timestamp compatibility
+        # =========================
+        # Downstream Spark (spark.read.parquet on uploaded data) failed on TIMESTAMP(NANOS, …) /
+        # unsupported Parquet timestamp types. read_csv(..., parse_dates=…) gives pandas datetime64[ns]
+        # by default; Arrow inherits that when we call from_pandas. Cast to datetime64[us] here so the
+        # in-memory column matches microsecond Parquet and nanoseconds are not written through.
+        if not hist_chunk.empty:
+            hist_chunk["measurement_tstamp"] = hist_chunk["measurement_tstamp"].astype(
+                "datetime64[us]"
+            )
+        if not stream_chunk.empty:
+            stream_chunk["measurement_tstamp"] = stream_chunk["measurement_tstamp"].astype(
+                "datetime64[us]"
+            )
+
+        # =========================
         # Add partition columns
         # =========================
         if not hist_chunk.empty:
@@ -99,7 +115,11 @@ def process():
                 pa.Table.from_pandas(hist_chunk, preserve_index=False),
                 root_path=HIST_OUTPUT_DIR,
                 partition_cols=["year", "month"],
-                compression="snappy"
+                compression="snappy",
+                # Parquet logical type: microseconds (Spark’s usual path). Stops ns ending up in the file.
+                coerce_timestamps="us",
+                # ns→us loses sub-microsecond digits; Arrow errors unless truncation is allowed.
+                allow_truncated_timestamps=True,
             )
 
         if not stream_chunk.empty:
@@ -110,7 +130,10 @@ def process():
                 pa.Table.from_pandas(stream_chunk, preserve_index=False),
                 root_path=STREAM_OUTPUT_DIR,
                 partition_cols=["year", "month"],
-                compression="snappy"
+                compression="snappy",
+                # Same Spark-safe timestamp handling as historical (see above).
+                coerce_timestamps="us",
+                allow_truncated_timestamps=True,
             )
 
         # =========================

@@ -3,6 +3,7 @@ pyspark>=3.5.1          # distributed data processing engine
 kafka-python>=2.0.2     # Kafka producer/consumer in Python
 boto3>=1.24.28          # AWS S3 access
 pyarrow>=15.0.0         # read/write Parquet files
+python-dotenv>=1.0.0    # load .env for local configuration (e.g. scripts using AWS)
 
 # ── API and dashboard ─────────────────────────────────────────────────────
 fastapi>=0.110.0        # REST API server

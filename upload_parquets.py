@@ -1,20 +1,14 @@
-import os, boto3, json
+import os
+import boto3
+from dotenv import load_dotenv
 
-
-# NOTE: Do NOT upload AWS information to Github.
-
-credentials = {
-    'region_name': 'us-east-1',
-    'aws_access_key_id': '***',
-    'aws_secret_access_key': '****',
-    'aws_session_token': '****'
-}
-
-session = boto3.session.Session(**credentials)
-s3 = session.client('s3')
+# Create a `.env` file in the project (e.g. repo root) with AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY, and optional AWS_SESSION_TOKEN / AWS_REGION. load_dotenv() loads
+# it when you run the script so boto3 sees those vars—no credentials in source code.
+load_dotenv()
+s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
 
 BUCKET = "ndot-traffic-pipeline"
-LOCAL_ROOT = "inrix_historical_parquet/year=2023"  # adjust if needed
 S3_PREFIX = "raw/year=2023"
 
 def upload_parquet_structure(local_root, s3_prefix):
@@ -38,5 +32,11 @@ def upload_parquet_structure(local_root, s3_prefix):
                 s3.upload_file(local_path, BUCKET, s3_key)
 
 
+def upload_all():
+    # Before, only the historical parquet tree was pushed to S3, so raw/year=2023 had
+    # Jan–May but not the stream months. Run the same upload for both local roots.
+    upload_parquet_structure("inrix_historical_parquet/year=2023", S3_PREFIX)
+    upload_parquet_structure("inrix_stream_parquet/year=2023", S3_PREFIX)
+
 # run it
-upload_parquet_structure(LOCAL_ROOT, S3_PREFIX)
+upload_all()

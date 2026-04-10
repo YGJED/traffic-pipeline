@@ -37,14 +37,31 @@ def find_partition_dirs(root: str) -> list[str]:
 def consolidate_partition(dirpath: str, filenames: list[str]):
     full_paths = [os.path.join(dirpath, f) for f in filenames]
 
-    if len(full_paths) == 1:
-        print(f"  Already 1 file — skipping: {dirpath}")
-        return
-
-    print(f"  Reading {len(full_paths)} files from {dirpath} ...")
+    # prune.py can leave one Parquet per partition or several (chunked writes). Consolidation is
+    # not only merging shards: every Hive leaf (year=/month=) should end up as one canonical
+    # data.parquet with microsecond timestamps and sorted rows before upload / Spark. We used to
+    # bail out when there was already a single file, but that skipped the rewrite — the lone file
+    # could still be TIMESTAMP(NANOS) or not named data.parquet, which broke spark.read.parquet on S3.
+    # Always run the full read → cast/sort → write path.
+    print(f"  Reading {len(full_paths)} file(s) from {dirpath} ...")
 
     # Read all parquet files in this partition into one table
     table = pq.read_table(full_paths)
+
+    # Downstream Spark (e.g. spark.read.parquet on S3) often fails on nanosecond timestamps in Parquet:
+    # errors mention TIMESTAMP(NANOS) or an unsupported / illegal Parquet timestamp type. That happens
+    # because pandas/pyarrow sometimes still produce or round-trip timestamp[ns] even when prune tried
+    # to standardize; reading many files into one table can preserve ns in the combined schema.
+    # If this column is ns, cast it to microseconds here so the single output file is Spark-safe.
+    if "measurement_tstamp" in table.schema.names:
+        field = table.schema.field("measurement_tstamp")
+        if pa.types.is_timestamp(field.type) and getattr(field.type, "unit", None) == "ns":
+            col_idx = table.schema.get_field_index("measurement_tstamp")
+            table = table.set_column(
+                col_idx,
+                "measurement_tstamp",
+                table.column(col_idx).cast(pa.timestamp("us")),
+            )
 
     # Sort by timestamp so Spark can range-scan efficiently
     if "measurement_tstamp" in table.schema.names:
@@ -61,6 +78,11 @@ def consolidate_partition(dirpath: str, filenames: list[str]):
         temp_path,
         compression="snappy",
         row_group_size=500_000,
+        # Tell the Parquet writer to store timestamps as microseconds (Spark’s happy path). Without this,
+        # Arrow may still emit nanosecond logical types in the file even after the in-table cast above.
+        coerce_timestamps="us",
+        # Coercing ns→us loses digits below microseconds; Arrow would raise unless we explicitly allow that truncation.
+        allow_truncated_timestamps=True,
     )
 
     # Delete the originals
