@@ -1,39 +1,36 @@
 version: '3.8'
 
-x-airflow-common:
-  &airflow-common
-  image: apache/airflow:2.8.1
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.3
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
   volumes:
-    - ./dags:/opt/airflow/dags        # DAG files go here
-    - ./scripts:/opt/airflow/scripts  # pipeline scripts go here
-    - ./logs:/opt/airflow/logs
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/scripts:/opt/airflow/scripts
   depends_on:
     postgres:
       condition: service_healthy
 
 services:
 
-  # ── Zookeeper (required by Kafka) ──────────────────────────────────────────
+  # -----------------------
+  # ZOOKEEPER
+  # -----------------------
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    container_name: zookeeper
+    image: confluentinc/cp-zookeeper:7.6.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
 
-  # ── Kafka ──────────────────────────────────────────────────────────────────
+  # -----------------------
+  # KAFKA
+  # -----------------------
   kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    container_name: kafka
+    image: confluentinc/cp-kafka:7.6.0
     depends_on:
       - zookeeper
     ports:
@@ -41,14 +38,18 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
 
-  # ── Postgres (Airflow's backend database) ──────────────────────────────────
+  # -----------------------
+  # POSTGRES (Airflow metadata DB)
+  # -----------------------
   postgres:
     image: postgres:13
-    container_name: postgres
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
@@ -58,25 +59,27 @@ services:
       interval: 5s
       retries: 5
 
-  # ── Airflow: one-time DB initialization ───────────────────────────────────
+  # -----------------------
+  # AIRFLOW INIT
+  # -----------------------
   airflow-init:
     <<: *airflow-common
-    container_name: airflow-init
     command: >
-      bash -c "airflow db init &&
+      bash -c "airflow db migrate &&
                airflow users create
-                 --username admin
-                 --password admin
-                 --firstname Admin
-                 --lastname User
-                 --role Admin
-                 --email admin@example.com"
+               --username admin
+               --password admin
+               --firstname Admin
+               --lastname User
+               --role Admin
+               --email admin@example.com"
     restart: "no"
 
-  # ── Airflow: web UI (open http://localhost:8080) ───────────────────────────
+  # -----------------------
+  # AIRFLOW WEBSERVER
+  # -----------------------
   airflow-webserver:
     <<: *airflow-common
-    container_name: airflow-webserver
     command: webserver
     ports:
       - "8080:8080"
@@ -84,11 +87,65 @@ services:
       - airflow-init
     restart: always
 
-  # ── Airflow: scheduler (runs DAGs) ───────────────────────────────────
+  # -----------------------
+  # AIRFLOW SCHEDULER
+  # -----------------------
   airflow-scheduler:
     <<: *airflow-common
-    container_name: airflow-scheduler
     command: scheduler
     depends_on:
       - airflow-init
     restart: always
+
+  # -----------------------
+  # SPARK MASTER
+  # -----------------------
+  spark-master:
+    image: apache/spark:3.5.0
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+
+  # -----------------------
+  # SPARK WORKER
+  # -----------------------
+  spark-worker:
+    image: apache/spark:3.5.0
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+
+  # -----------------------
+  # SPARK STREAMING JOB
+  # -----------------------
+  spark-app:
+    build: ./spark
+    depends_on:
+      - kafka
+      - spark-master
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./spark:/app
+    command: >
+      spark-submit
+      --master spark://spark-master:7077
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
+      /app/streaming_job.py
+
+  # -----------------------
+  # STREAMLIT DASHBOARD
+  # -----------------------
+  streamlit:
+    build: ./streamlit
+    ports:
+      - "8501:8501"
+    depends_on:
+      - kafka
+    volumes:
+      - ./streamlit:/app
+    command: streamlit run app.py --server.address=0.0.0.0
