@@ -1,11 +1,11 @@
 import os
 import boto3
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Create a `.env` file in the project (e.g. repo root) with AWS_ACCESS_KEY_ID,
 # AWS_SECRET_ACCESS_KEY, and optional AWS_SESSION_TOKEN / AWS_REGION. load_dotenv() loads
 # it when you run the script so boto3 sees those vars—no credentials in source code.
-load_dotenv()
+load_dotenv(find_dotenv())
 s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
 
 BUCKET = "ndot-traffic-pipeline"
@@ -39,4 +39,4 @@ def upload_all():
     upload_parquet_structure("inrix_stream_parquet/year=2023", S3_PREFIX)
 
 # run it
-upload_all()
+# upload_all()

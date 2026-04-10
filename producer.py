@@ -1,6 +1,7 @@
 import time
 import json
 import io
+import os
 import argparse
 from datetime import datetime
 
@@ -8,8 +9,7 @@ import boto3
 import pandas as pd
 import pyarrow.parquet as pq
 from kafka import KafkaProducer
-
-# LOOK AT TODO WHEN S3 IS INSTANTIATED
+from dotenv import load_dotenv, find_dotenv
 
 # Example usage:
 # python producer.py \
@@ -77,10 +77,8 @@ KAFKA_BOOTSTRAP = "localhost:9092"
 # AWS S3 CLIENT
 # =========================
 
-# TODO: Would need to add credentials code from upload_parquets.py/Colab HWs
-#       or commit to .env/using aws cli for secrets management
-
-s3 = boto3.client("s3")
+load_dotenv(find_dotenv())
+s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
 
 # =========================
 # KAFKA PRODUCER
