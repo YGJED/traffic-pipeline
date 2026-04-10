@@ -20,5 +20,39 @@ TODO:
  To see streamlit dashboard, go to `localhost:8501`
  Will need to docker exec into the producer container to be able to start up the producer
 
+ #### Testing Kafka producer locally
+
+Prerequisites:
+- Create a `.env` file in the project root with AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)
+- S3 data must be in the folder structure: `s3://ndot-traffic-pipeline/raw/year=YYYY/month=M/data.parquet`
+
+Steps:
+1. Start the Kafka, producer, and consumer services:
+    ```bash
+    docker-compose up --build kafka producer-app kafka-consumer
+    ```
+    - The `kafka-consumer` service will automatically start consuming from the `road-segments` topic
+    - Kafka has a healthcheck; consumer waits for Kafka to be healthy before connecting
+
+2. In another shell, exec into the producer container and run the producer:
+    ```bash
+    docker exec -it <producer-app-container-id> bash
+    python producer.py --start-time 2023-01-01T00:00:00 --end-time 2023-03-31T23:59:59 --rate 1 --run-duration 60
+    ```
+    - The producer loads only the necessary months from S3 based on your time range
+    - `--rate 1` means one full pass through the data per second
+    - `--run-duration 60` limits execution to 60 seconds
+
+3. View consumer logs in another shell:
+    ```bash
+    docker logs -f <kafka-consumer-container-id>
+    ```
+    Each message will be logged as JSON with topic, partition, offset, key, and value.
+
+4. To find container IDs:
+    ```bash
+    docker ps | grep kafka-consumer
+    docker ps | grep producer-app
+    ```
 
 

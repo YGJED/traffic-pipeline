@@ -44,6 +44,43 @@ services:
 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # -----------------------
+  # PRODUCER CONTAINER
+  # -----------------------
+  producer-app:
+    build: ./producer
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - KAFKA_TOPIC=road-segments
+    volumes:
+      - ./producer:/app
+      - ./.env:/app/.env
+    command: tail -f /dev/null
+
+  # -----------------------
+  # KAFKA CONSUMER FOR TESTING
+  # -----------------------
+  kafka-consumer:
+    build: ./producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - KAFKA_TOPIC=road-segments
+    volumes:
+      - ./producer:/app
+      - ./.env:/app/.env
+    command: python consumer.py --bootstrap kafka:9092 --topic road-segments
 
   # -----------------------
   # POSTGRES (Airflow metadata DB)
