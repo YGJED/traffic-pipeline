@@ -14,4 +14,11 @@ TODO:
  - Put more information about what each `.py` file does
 
 
+ #### Instructions to run
+ To start docker containers, run `docker-compose up --build`. Each service has its own docker container
+ IMPORTANT: I kept the spark scripts in `airflow/scripts` but they should probably be seperated into the `spark` folder and a trigger in the `airflow/scripts`
+ To see streamlit dashboard, go to `localhost:8501`
+ Will need to docker exec into the producer container to be able to start up the producer
+
+
 

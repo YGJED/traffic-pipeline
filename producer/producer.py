@@ -18,6 +18,9 @@ from dotenv import load_dotenv, find_dotenv
 #   --rate 1 \
 #   --run-duration 600
 
+# one line version:
+# python producer.py --start-time 2023-01-01T00:00:00 --end-time 2023-01-01T03:00:00 --rate 1 --run-duration 600
+
 # =========================
 # ARGUMENT PARSING
 # =========================
