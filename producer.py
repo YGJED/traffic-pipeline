@@ -18,6 +18,9 @@ from dotenv import load_dotenv, find_dotenv
 #   --rate 1 \
 #   --run-duration 600
 
+# one line version:
+# python producer.py --start-time 2023-01-01T00:00:00 --end-time 2023-01-01T03:00:00 --rate 1 --run-duration 600
+
 # =========================
 # ARGUMENT PARSING
 # =========================
@@ -70,8 +73,8 @@ RUN_DURATION = args.run_duration
 S3_BUCKET = "ndot-traffic-pipeline"
 S3_PREFIX = "raw/year=2023"
 
-KAFKA_TOPIC = "road-segments"
-KAFKA_BOOTSTRAP = "localhost:9092"
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "road-segments")
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
 
 # =========================
 # AWS S3 CLIENT
@@ -121,14 +124,51 @@ def load_parquet_from_s3(bucket, key):
 
 
 def load_all_data():
-    files = list_parquet_files(S3_BUCKET, S3_PREFIX)
-
+    """Load parquet data for the requested time range.
+    
+    Reads from S3 folder structure: raw/year=YYYY/month=M/data.parquet
+    Only loads months that overlap with [START_TIME, END_TIME].
+    """
+    # Determine which months to load
+    start_month = START_TIME.month
+    start_year = START_TIME.year
+    
+    if END_TIME:
+        end_month = END_TIME.month
+        end_year = END_TIME.year
+    else:
+        end_month = 12
+        end_year = start_year
+    
+    # Generate list of (year, month) tuples to load
+    months_to_load = []
+    
+    if start_year == end_year:
+        # Same year
+        for month in range(start_month, end_month + 1):
+            months_to_load.append((start_year, month))
+    else:
+        # Different years - load rest of start year
+        for month in range(start_month, 13):
+            months_to_load.append((start_year, month))
+        # Load intermediate full years (if any)
+        for year in range(start_year + 1, end_year):
+            for month in range(1, 13):
+                months_to_load.append((year, month))
+        # Load start of end year
+        for month in range(1, end_month + 1):
+            months_to_load.append((end_year, month))
+    
     dfs = []
-    for key in files:
-        print(f"Loading {key}")
-        df = load_parquet_from_s3(S3_BUCKET, key)
-        dfs.append(df)
-
+    for year, month in months_to_load:
+        path = f"raw/year={year}/month={month}/data.parquet"
+        print(f"Loading {path}")
+        try:
+            df = load_parquet_from_s3(S3_BUCKET, path)
+            dfs.append(df)
+        except Exception as e:
+            print(f"Warning: Could not load {path}: {e}")
+    
     if not dfs:
         raise ValueError("No parquet files found in S3")
 
@@ -147,6 +187,7 @@ def load_all_data():
     df = df.sort_values("measurement_tstamp")
 
     return df
+
 
 # =========================
 # STREAM TO KAFKA
