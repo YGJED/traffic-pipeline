@@ -1,525 +1,319 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime
-import time
+from pathlib import Path
 
 st.set_page_config(
-    page_title="Traffic Intelligence",
-    page_icon="🚦",
+    page_title="Davidson County — Road Network",
+    page_icon="🗺️",
     layout="wide",
 )
 
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'IBM Plex Sans', sans-serif;
+    }
     .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-    .live-badge {
-        display: inline-flex; align-items: center; gap: 6px;
-        background: #d4edda; color: #155724;
-        padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+
+    .top-bar {
+        display: flex; align-items: baseline; gap: 16px;
+        border-bottom: 2px solid #1a1a2e; padding-bottom: 10px; margin-bottom: 1rem;
     }
-    .live-dot {
-        width: 8px; height: 8px; border-radius: 50%; background: #28a745;
-        animation: pulse 1.5s ease-in-out infinite;
+    .top-bar h1 {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.4rem; font-weight: 600; color: #1a1a2e; margin: 0;
     }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-    .section-header { font-size: 15px; font-weight: 600; color: #343a40; margin-bottom: 0.75rem; }
-    div[data-testid="stMetric"] { background: #f8f9fa; border-radius: 10px; padding: 0.75rem 1rem; border: 1px solid #e9ecef; }
+    .top-bar span {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.75rem; color: #888; letter-spacing: 0.08em;
+    }
+
+    .stat-card {
+        background: #f7f7f9;
+        border-left: 3px solid #1a1a2e;
+        border-radius: 4px;
+        padding: 10px 14px;
+        font-family: 'IBM Plex Mono', monospace;
+    }
+    .stat-card .val { font-size: 1.5rem; font-weight: 600; color: #1a1a2e; }
+    .stat-card .lbl { font-size: 0.7rem; color: #888; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px; }
+
+    .bearing-legend {
+        display: flex; gap: 10px; flex-wrap: wrap;
+        font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .bearing-pill {
+        padding: 3px 10px; border-radius: 3px;
+        font-weight: 600; color: white;
+    }
+
+    div[data-testid="stDataFrame"] { border: 1px solid #e9ecef; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Hardcoded segment data — matches DynamoDB schema from PySpark output
-# Replace this block with: requests.get("http://fastapi/congestion").json()
+# Load data
 # ---------------------------------------------------------------------------
 
-SEGMENTS = [
-    {
-        "xd_id": "1140699194",
-        "road_name": "I-65 N",
-        "lat": 36.1921, "lon": -86.7792,
-        "current_speed": 28.4,
-        "reference_speed": 65.0,
-        "historical_avg_speed": 58.2,
-        "speed_vs_historical": -29.8,
-        "congestion_ratio": 0.44,
-        "severity": "slow",
-        "segment_miles": 0.8,
-        "confidence_score": 0.91,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699201",
-        "road_name": "I-40 E",
-        "lat": 36.1612, "lon": -86.7201,
-        "current_speed": 12.1,
-        "reference_speed": 70.0,
-        "historical_avg_speed": 61.5,
-        "speed_vs_historical": -49.4,
-        "congestion_ratio": 0.17,
-        "severity": "severe",
-        "segment_miles": 1.1,
-        "confidence_score": 0.95,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699215",
-        "road_name": "I-24 W",
-        "lat": 36.1334, "lon": -86.8198,
-        "current_speed": 52.3,
-        "reference_speed": 60.0,
-        "historical_avg_speed": 54.0,
-        "speed_vs_historical": -1.7,
-        "congestion_ratio": 0.87,
-        "severity": "normal",
-        "segment_miles": 0.9,
-        "confidence_score": 0.88,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699230",
-        "road_name": "Briley Pkwy",
-        "lat": 36.2241, "lon": -86.8612,
-        "current_speed": 31.0,
-        "reference_speed": 55.0,
-        "historical_avg_speed": 48.3,
-        "speed_vs_historical": -17.3,
-        "congestion_ratio": 0.56,
-        "severity": "slow",
-        "segment_miles": 0.7,
-        "confidence_score": 0.84,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699244",
-        "road_name": "US-31 N",
-        "lat": 36.2389, "lon": -86.8034,
-        "current_speed": 44.7,
-        "reference_speed": 50.0,
-        "historical_avg_speed": 43.1,
-        "speed_vs_historical": 1.6,
-        "congestion_ratio": 0.89,
-        "severity": "normal",
-        "segment_miles": 0.6,
-        "confidence_score": 0.79,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699258",
-        "road_name": "Charlotte Ave",
-        "lat": 36.1601, "lon": -86.8401,
-        "current_speed": 9.8,
-        "reference_speed": 40.0,
-        "historical_avg_speed": 28.7,
-        "speed_vs_historical": -18.9,
-        "congestion_ratio": 0.25,
-        "severity": "severe",
-        "segment_miles": 0.4,
-        "confidence_score": 0.93,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699271",
-        "road_name": "Murfreesboro Rd",
-        "lat": 36.1198, "lon": -86.7489,
-        "current_speed": 33.2,
-        "reference_speed": 45.0,
-        "historical_avg_speed": 36.4,
-        "speed_vs_historical": -3.2,
-        "congestion_ratio": 0.74,
-        "severity": "normal",
-        "segment_miles": 0.5,
-        "confidence_score": 0.86,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699285",
-        "road_name": "Gallatin Pike",
-        "lat": 36.2012, "lon": -86.7334,
-        "current_speed": 18.5,
-        "reference_speed": 40.0,
-        "historical_avg_speed": 31.2,
-        "speed_vs_historical": -12.7,
-        "congestion_ratio": 0.46,
-        "severity": "slow",
-        "segment_miles": 0.5,
-        "confidence_score": 0.81,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699299",
-        "road_name": "Nolensville Pk",
-        "lat": 36.1023, "lon": -86.7801,
-        "current_speed": 29.1,
-        "reference_speed": 35.0,
-        "historical_avg_speed": 30.5,
-        "speed_vs_historical": -1.4,
-        "congestion_ratio": 0.83,
-        "severity": "normal",
-        "segment_miles": 0.4,
-        "confidence_score": 0.77,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-    {
-        "xd_id": "1140699312",
-        "road_name": "8th Ave S",
-        "lat": 36.1512, "lon": -86.7912,
-        "current_speed": 22.4,
-        "reference_speed": 35.0,
-        "historical_avg_speed": 27.8,
-        "speed_vs_historical": -5.4,
-        "congestion_ratio": 0.64,
-        "severity": "slow",
-        "segment_miles": 0.3,
-        "confidence_score": 0.90,
-        "last_updated": "2024-03-15T08:32:00Z",
-    },
-]
+CSV_PATH = Path("XD_identification.csv")
+
+@st.cache_data
+def load_segments(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df.columns = df.columns.str.strip()
+
+    # Rename to safe internal names
+    df = df.rename(columns={
+        "xd":               "xd_id",
+        "road-name":        "road_name",
+        "road-num":         "road_num",
+        "bearing":          "bearing",
+        "miles":            "miles",
+        "frc":              "frc",
+        "county":           "county",
+        "state":            "state",
+        "zip":              "zip",
+        "timezone_name":    "timezone",
+        "start_latitude":   "start_lat",
+        "start_longitude":  "start_lon",
+        "end_latitude":     "end_lat",
+        "end_longitude":    "end_lon",
+    })
+
+    df["road_name"] = df["road_name"].fillna("").str.strip()
+    df["bearing"]   = df["bearing"].fillna("?").str.strip().str.upper()
+    df["display_name"] = df.apply(
+        lambda r: r["road_name"] if r["road_name"] else f"Segment {r['xd_id']}", axis=1
+    )
+    df["mid_lat"] = (df["start_lat"] + df["end_lat"]) / 2
+    df["mid_lon"] = (df["start_lon"] + df["end_lon"]) / 2
+    return df
+
+if not CSV_PATH.exists():
+    st.error(f"Could not find `{CSV_PATH}` — place it in the same directory as app.py.")
+    st.stop()
+
+df = load_segments(CSV_PATH)
 
 # ---------------------------------------------------------------------------
-# Hardcoded Waze events — matches Waze data schema
-# Replace with: requests.get("http://fastapi/waze-alerts").json()
+# Bearing → color + lateral offset so N/S and E/W pairs don't overlap
 # ---------------------------------------------------------------------------
 
-WAZE_EVENTS = [
-    {
-        "uuid": "waze-uuid-001",
-        "type": "ACCIDENT",
-        "subtype": "ACCIDENT_MAJOR",
-        "street": "I-40 E",
-        "lat": 36.1634, "lon": -86.7178,
-        "date": "2024-03-15", "hour": 8, "minute": 18,
-        "day_of_week": "Friday",
-        "confidence": 0.92,
-        "reliability": 8,
-        "nthumbsup": 14,
-        "reportrating": 4,
-    },
-    {
-        "uuid": "waze-uuid-002",
-        "type": "HAZARD",
-        "subtype": "HAZARD_ON_ROAD_OBJECT",
-        "street": "I-65 N",
-        "lat": 36.1945, "lon": -86.7801,
-        "date": "2024-03-15", "hour": 8, "minute": 25,
-        "day_of_week": "Friday",
-        "confidence": 0.78,
-        "reliability": 6,
-        "nthumbsup": 5,
-        "reportrating": 3,
-    },
-    {
-        "uuid": "waze-uuid-003",
-        "type": "ROAD_CLOSED",
-        "subtype": "ROAD_CLOSED_CONSTRUCTION",
-        "street": "I-24 W",
-        "lat": 36.1312, "lon": -86.8223,
-        "date": "2024-03-15", "hour": 7, "minute": 55,
-        "day_of_week": "Friday",
-        "confidence": 0.99,
-        "reliability": 10,
-        "nthumbsup": 22,
-        "reportrating": 5,
-    },
-    {
-        "uuid": "waze-uuid-004",
-        "type": "JAM",
-        "subtype": "JAM_STAND_STILL_TRAFFIC",
-        "street": "Charlotte Ave",
-        "lat": 36.1589, "lon": -86.8388,
-        "date": "2024-03-15", "hour": 8, "minute": 10,
-        "day_of_week": "Friday",
-        "confidence": 0.95,
-        "reliability": 9,
-        "nthumbsup": 31,
-        "reportrating": 5,
-    },
-    {
-        "uuid": "waze-uuid-005",
-        "type": "WEATHERHAZARD",
-        "subtype": "HAZARD_WEATHER_FLOOD",
-        "street": "Nolensville Pk",
-        "lat": 36.1001, "lon": -86.7823,
-        "date": "2024-03-15", "hour": 7, "minute": 40,
-        "day_of_week": "Friday",
-        "confidence": 0.85,
-        "reliability": 7,
-        "nthumbsup": 9,
-        "reportrating": 4,
-    },
-]
-
-# ---------------------------------------------------------------------------
-# Display helpers
-# ---------------------------------------------------------------------------
-
-SEVERITY_COLOR = {
-    "severe": "#dc3545",
-    "slow":   "#fd7e14",
-    "normal": "#28a745",
+BEARING_COLORS = {
+    "N": "#2563eb",   # blue
+    "S": "#dc2626",   # red
+    "E": "#16a34a",   # green
+    "W": "#d97706",   # amber
+    "?": "#6b7280",   # gray fallback
 }
 
-WAZE_META = {
-    "ACCIDENT":      {"icon": "🚨", "label": "Accident"},
-    "HAZARD":        {"icon": "⚠️",  "label": "Hazard"},
-    "ROAD_CLOSED":   {"icon": "🚧", "label": "Road closed"},
-    "JAM":           {"icon": "🚗", "label": "Traffic jam"},
-    "WEATHERHAZARD": {"icon": "🌊", "label": "Weather hazard"},
+# Offset in degrees (~10–15 m) perpendicular to travel direction
+OFFSET = 0.00012
+
+BEARING_OFFSET = {
+    "N": (-OFFSET, 0),       # northbound → shift west
+    "S": ( OFFSET, 0),       # southbound → shift east
+    "E": (0,  OFFSET),       # eastbound  → shift north
+    "W": (0, -OFFSET),       # westbound  → shift south
+    "?": (0,  0),
 }
 
-def severity_label(s):
-    return s.capitalize()
+# FRC → line weight  (FRC 1=motorway, 5=local)
+def frc_weight(frc):
+    return {1: 6, 2: 5, 3: 5, 4: 4, 5: 3}.get(int(frc) if pd.notna(frc) else 4, 4)
 
-def waze_timestamp(e):
-    return f"{e['day_of_week']} {e['hour']:02d}:{e['minute']:02d}"
+def offset_coords(row):
+    dlat, dlon = BEARING_OFFSET.get(row["bearing"], (0, 0))
+    return [
+        [row["start_lat"] + dlat, row["start_lon"] + dlon],
+        [row["end_lat"]   + dlat, row["end_lon"]   + dlon],
+    ]
 
 # ---------------------------------------------------------------------------
-# Derived metrics — pure display math, all inputs pre-computed by PySpark
+# Sidebar filters
 # ---------------------------------------------------------------------------
 
-df = pd.DataFrame(SEGMENTS)
+with st.sidebar:
+    st.markdown("### Filters")
 
-avg_speed         = round(df["current_speed"].mean(), 1)
-avg_vs_historical = round(df["speed_vs_historical"].mean(), 1)
-congested_count   = int((df["severity"] != "normal").sum())
-worst             = df.loc[df["current_speed"].idxmin()]
-last_updated_fmt  = datetime.fromisoformat(
-    SEGMENTS[0]["last_updated"].replace("Z", "")
-).strftime("%I:%M %p")
+    all_bearings = sorted(df["bearing"].unique())
+    sel_bearings = st.multiselect(
+        "Bearing", all_bearings, default=all_bearings,
+        help="Filter by travel direction"
+    )
+
+    frc_min, frc_max = int(df["frc"].min()), int(df["frc"].max())
+    sel_frc = st.slider(
+        "Functional Road Class (1=highway, 5=local)",
+        frc_min, frc_max, (frc_min, frc_max)
+    )
+
+    st.markdown("---")
+    show_labels = st.toggle("Show speed labels on map", value=False)
+    show_table  = st.toggle("Show segment table", value=True)
+
+# Apply filters
+mask = (
+    df["bearing"].isin(sel_bearings) &
+    df["frc"].between(sel_frc[0], sel_frc[1])
+)
+
+filtered = df[mask].copy()
 
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 
-col_title, col_badge, col_refresh = st.columns([4, 1, 1])
-with col_title:
-    st.markdown("## 🚦 Live Traffic Intelligence")
-with col_badge:
-    st.markdown('<div class="live-badge"><div class="live-dot"></div> Live</div>', unsafe_allow_html=True)
-with col_refresh:
-    if st.button("↻ Refresh", width='stretch'):
-        st.rerun()
-
-st.caption(f"Nashville metro · Davidson County · data as of {last_updated_fmt}")
-st.divider()
+st.markdown(f"""
+<div class="top-bar">
+  <h1>🗺️ Davidson County Road Network</h1>
+  <span>XD SEGMENT VIEWER · {len(filtered):,} of {len(df):,} segments</span>
+</div>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Metric cards
+# Stat cards
 # ---------------------------------------------------------------------------
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric(
-    "Avg Network Speed",
-    f"{avg_speed} mph",
-    f"{avg_vs_historical:+.1f} mph vs historical avg",
-)
-m2.metric(
-    "Congested Segments",
-    f"{congested_count} / {len(SEGMENTS)}",
-    f"{len(SEGMENTS) - congested_count} flowing normally",
-)
-m3.metric(
-    "Worst Bottleneck",
-    worst["road_name"],
-    f"{worst['current_speed']} mph · {round(worst['congestion_ratio']*100)}% of free-flow",
-)
-m4.metric(
-    "Active Waze Alerts",
-    len(WAZE_EVENTS),
-    f"avg confidence {round(sum(e['confidence'] for e in WAZE_EVENTS) / len(WAZE_EVENTS) * 100)}%",
-)
+c1, c2, c3, c4, c5 = st.columns(5)
+stats = [
+    (c1, len(filtered),                              "Segments shown"),
+    (c5, ", ".join(sorted(filtered["bearing"].unique())), "Bearings"),
+]
+for col, val, lbl in stats:
+    col.markdown(f'<div class="stat-card"><div class="val">{val}</div><div class="lbl">{lbl}</div></div>', unsafe_allow_html=True)
 
-st.divider()
+st.markdown("<br>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Map + bar chart
+# Bearing legend
 # ---------------------------------------------------------------------------
 
-map_col, chart_col = st.columns([1.5, 1])
+pills = "".join(
+    f'<span class="bearing-pill" style="background:{BEARING_COLORS[b]}">{b}</span> {b}ound &nbsp;&nbsp;'
+    for b in ["N", "S", "E", "W"] if b in df["bearing"].values
+)
+st.markdown(f'<div class="bearing-legend">{pills}</div>', unsafe_allow_html=True)
 
-with map_col:
-    st.markdown('<div class="section-header">Live map — congestion &amp; Waze alerts</div>', unsafe_allow_html=True)
+# ---------------------------------------------------------------------------
+# Map
+# ---------------------------------------------------------------------------
 
-    fmap = folium.Map(
-        location=[36.165, -86.785],
-        zoom_start=12,
-        tiles="CartoDB positron",
-        prefer_canvas=True,
-    )
+if filtered.empty:
+    st.warning("No segments match the current filters.")
+    st.stop()
 
-    for seg in SEGMENTS:
-        hex_color = SEVERITY_COLOR[seg["severity"]]
-        pct_of_ff = round(seg["congestion_ratio"] * 100)
-        vs_hist   = seg["speed_vs_historical"]
-        vs_str    = f"+{vs_hist:.1f}" if vs_hist >= 0 else f"{vs_hist:.1f}"
+center_lat = filtered["mid_lat"].mean()
+center_lon = filtered["mid_lon"].mean()
 
-        popup_html = f"""
-        <div style="font-family:sans-serif;min-width:190px;font-size:13px">
-          <b style="font-size:14px">{seg['road_name']}</b>
-          &nbsp;<span style="color:{hex_color};font-weight:600">{severity_label(seg['severity'])}</span><br>
-          <hr style="margin:6px 0">
-          <span style="color:#555">XD segment:</span> {seg['xd_id']}<br>
-          <span style="color:#555">Current speed:</span> <b>{seg['current_speed']} mph</b><br>
-          <span style="color:#555">Reference (free-flow):</span> {seg['reference_speed']} mph<br>
-          <span style="color:#555">Historical avg:</span> {seg['historical_avg_speed']} mph<br>
-          <span style="color:#555">vs historical:</span> <b style="color:{hex_color}">{vs_str} mph</b><br>
-          <span style="color:#555">% of free-flow:</span> {pct_of_ff}%<br>
-          <span style="color:#555">Segment length:</span> {seg['segment_miles']} mi<br>
-          <span style="color:#555">Confidence:</span> {round(seg['confidence_score']*100)}%<br>
-          <span style="color:#aaa;font-size:11px">Updated {last_updated_fmt}</span>
-        </div>
-        """
+fmap = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=13,
+    tiles="CartoDB positron",
+    prefer_canvas=True,
+)
 
-        folium.CircleMarker(
-            location=[seg["lat"], seg["lon"]],
-            radius=14,
-            color=hex_color,
-            fill=True,
-            fill_color=hex_color,
-            fill_opacity=0.75,
-            popup=folium.Popup(popup_html, max_width=240),
-            tooltip=f"{seg['road_name']} · {seg['current_speed']} mph ({severity_label(seg['severity'])})",
-        ).add_to(fmap)
+for _, row in filtered.iterrows():
+    color  = BEARING_COLORS.get(row["bearing"], "#6b7280")
+    weight = frc_weight(row["frc"])
+    coords = offset_coords(row)
 
-        folium.Marker(
-            location=[seg["lat"], seg["lon"]],
-            icon=folium.DivIcon(
-                html=f'<div style="font-size:10px;font-weight:700;color:white;text-align:center;line-height:28px">{round(seg["current_speed"])}</div>',
-                icon_size=(28, 28),
-                icon_anchor=(14, 14),
-            ),
-        ).add_to(fmap)
+    road_label = row["display_name"]
+    road_num   = str(row["road_num"]).strip() if pd.notna(row["road_num"]) else ""
+    full_name  = f"{road_label} ({road_num})" if road_num else road_label
 
-    for event in WAZE_EVENTS:
-        meta = WAZE_META.get(event["type"], {"icon": "📍", "label": event["type"]})
-        ts   = waze_timestamp(event)
-
-        waze_popup = f"""
-        <div style="font-family:sans-serif;min-width:190px;font-size:13px">
-          <b style="font-size:14px">{meta['icon']} {meta['label']}</b><br>
-          <span style="color:#555;font-size:12px">{event['subtype'].replace('_', ' ').title()}</span><br>
-          <hr style="margin:6px 0">
-          <span style="color:#555">Street:</span> <b>{event['street']}</b><br>
-          <span style="color:#555">Reported:</span> {ts}<br>
-          <span style="color:#555">Confidence:</span> {round(event['confidence']*100)}%<br>
-          <span style="color:#555">Reliability:</span> {event['reliability']}/10<br>
-          <span style="color:#555">Thumbs up:</span> {event['nthumbsup']}<br>
-          <span style="color:#555">Report rating:</span> {event['reportrating']}/5<br>
-          <span style="color:#aaa;font-size:11px">UUID: {event['uuid']}</span>
-        </div>
-        """
-
-        folium.Marker(
-            location=[event["lat"], event["lon"]],
-            icon=folium.DivIcon(
-                html=f'<div style="font-size:20px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.35))">{meta["icon"]}</div>',
-                icon_size=(28, 28),
-                icon_anchor=(14, 14),
-            ),
-            popup=folium.Popup(waze_popup, max_width=240),
-            tooltip=f"{meta['icon']} {meta['label']} · {event['street']}",
-        ).add_to(fmap)
-
-    legend_html = """
-    <div style="position:fixed;bottom:20px;left:20px;z-index:1000;background:white;
-         padding:10px 14px;border-radius:8px;border:1px solid #dee2e6;font-family:sans-serif;font-size:12px">
-      <b>Congestion (INRIX)</b><br>
-      <span style="color:#dc3545">●</span> Severe (&lt;40% free-flow)<br>
-      <span style="color:#fd7e14">●</span> Slow (40–65%)<br>
-      <span style="color:#28a745">●</span> Normal (&gt;65%)<br>
-      <br><b>Waze alerts</b><br>
-      🚨 Accident &nbsp; ⚠️ Hazard<br>
-      🚧 Road closed &nbsp; 🚗 Jam &nbsp; 🌊 Weather
+    popup_html = f"""
+    <div style="font-family:'IBM Plex Mono',monospace;min-width:200px;font-size:12px;line-height:1.7">
+      <b style="font-size:13px;font-family:'IBM Plex Sans',sans-serif">{full_name}</b><br>
+      <span style="color:{color};font-weight:600">▶ {row['bearing']}-bound</span><br>
+      <hr style="margin:5px 0;border-color:#eee">
+      <span style="color:#777">XD ID:</span> {row['xd_id']}<br>
+      <span style="color:#777">Length:</span> {row['miles']:.3f} mi<br>
+      <span style="color:#777">FRC:</span> {int(row['frc']) if pd.notna(row['frc']) else '?'}<br>
+      <span style="color:#777">ZIP:</span> {row['zip']}<br>
+      <span style="color:#777">County:</span> {row['county']}, {row['state']}<br>
+      <span style="color:#777">Start:</span> {row['start_lat']:.5f}, {row['start_lon']:.5f}<br>
+      <span style="color:#777">End:</span> {row['end_lat']:.5f}, {row['end_lon']:.5f}
     </div>
     """
-    fmap.get_root().html.add_child(folium.Element(legend_html))
-    st_folium(fmap, height=440, width='stretch')
 
-with chart_col:
-    st.markdown('<div class="section-header">Speed by segment</div>', unsafe_allow_html=True)
+    folium.PolyLine(
+        locations=coords,
+        color=color,
+        weight=weight,
+        opacity=0.85,
+        popup=folium.Popup(popup_html, max_width=250),
+        tooltip=f"{full_name} · {row['bearing']}-bound · {row['miles']:.2f} mi",
+    ).add_to(fmap)
 
-    chart_df = df.sort_values("current_speed")
+    # Optional midpoint label (XD ID)
+    if show_labels:
+        folium.Marker(
+            location=[row["mid_lat"], row["mid_lon"]],
+            icon=folium.DivIcon(
+                html=f'<div style="font-size:8px;font-family:monospace;color:#1a1a2e;white-space:nowrap;'
+                     f'background:rgba(255,255,255,0.75);padding:1px 3px;border-radius:2px">'
+                     f'{row["xd_id"]}</div>',
+                icon_size=(80, 16),
+                icon_anchor=(40, 8),
+            ),
+        ).add_to(fmap)
 
-    fig_bar = go.Figure()
-    fig_bar.add_trace(go.Bar(
-        y=chart_df["road_name"],
-        x=chart_df["reference_speed"],
-        name="Free-flow (reference_speed)",
-        orientation="h",
-        marker_color="rgba(200,200,200,0.4)",
-    ))
-    fig_bar.add_trace(go.Bar(
-        y=chart_df["road_name"],
-        x=chart_df["historical_avg_speed"],
-        name="Historical avg",
-        orientation="h",
-        marker_color="rgba(55,138,221,0.35)",
-    ))
-    fig_bar.add_trace(go.Bar(
-        y=chart_df["road_name"],
-        x=chart_df["current_speed"],
-        name="Current speed",
-        orientation="h",
-        marker_color=[SEVERITY_COLOR[s] for s in chart_df["severity"]],
-        text=[f"{v} mph" for v in chart_df["current_speed"]],
-        textposition="outside",
-    ))
-    fig_bar.update_layout(
-        barmode="overlay",
-        height=420,
-        margin=dict(l=0, r=50, t=10, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0, font=dict(size=11)),
-        xaxis_title="Speed (mph)",
-        yaxis=dict(tickfont=dict(size=11)),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis=dict(gridcolor="#f0f0f0"),
+# Map legend
+legend_html = """
+<div style="position:fixed;bottom:24px;left:24px;z-index:1000;
+     background:white;padding:12px 16px;border-radius:6px;
+     border:1px solid #ddd;font-family:'IBM Plex Mono',monospace;font-size:11px;
+     box-shadow:0 2px 8px rgba(0,0,0,0.1)">
+  <b style="font-size:12px">Bearing</b><br>
+  <span style="color:#2563eb">━━</span> Northbound<br>
+  <span style="color:#dc2626">━━</span> Southbound<br>
+  <span style="color:#16a34a">━━</span> Eastbound<br>
+  <span style="color:#d97706">━━</span> Westbound<br>
+  <br>
+  <b style="font-size:12px">Line weight</b><br>
+  Thicker = higher road class
+</div>
+"""
+fmap.get_root().html.add_child(folium.Element(legend_html))
+
+st_folium(fmap, height=560, width="stretch", returned_objects=[])
+
+# ---------------------------------------------------------------------------
+# Segment table
+# ---------------------------------------------------------------------------
+
+if show_table:
+    st.markdown("---")
+    st.markdown("#### Segment detail")
+
+    table_df = filtered[[
+        "xd_id", "display_name", "bearing", "miles", "frc",
+        "zip", "start_lat", "start_lon", "end_lat", "end_lon"
+    ]].copy()
+
+    table_df.columns = [
+        "XD ID", "Road", "Bearing", "Miles", "FRC",
+        "ZIP", "Start Lat", "Start Lon", "End Lat", "End Lon"
+    ]
+    table_df["Miles"] = table_df["Miles"].round(4)
+
+    st.dataframe(
+        table_df,
+        width=True,
+        hide_index=True,
+        column_config={
+            "XD ID":    st.column_config.TextColumn(width="medium"),
+            "Road":     st.column_config.TextColumn(width="large"),
+            "Bearing":  st.column_config.TextColumn(width="small"),
+            "Miles":    st.column_config.NumberColumn(width="small", format="%.4f"),
+            "FRC":      st.column_config.NumberColumn(width="small"),
+        }
     )
-    st.plotly_chart(fig_bar, width='stretch')
 
-st.divider()
-
-# ---------------------------------------------------------------------------
-# Waze alert list + segment data table
-# ---------------------------------------------------------------------------
-
-waze_col, table_col = st.columns([1, 1.5])
-
-with waze_col:
-    st.markdown('<div class="section-header">Active Waze alerts</div>', unsafe_allow_html=True)
-    for event in sorted(WAZE_EVENTS, key=lambda e: e["confidence"], reverse=True):
-        meta = WAZE_META.get(event["type"], {"icon": "📍", "label": event["type"]})
-        c1, c2 = st.columns([0.12, 0.88])
-        c1.markdown(f"<div style='font-size:22px;padding-top:2px'>{meta['icon']}</div>", unsafe_allow_html=True)
-        c2.markdown(
-            f"**{meta['label']}** · {event['street']}  \n"
-            f"{event['subtype'].replace('_', ' ').title()}  \n"
-            f"Confidence {round(event['confidence']*100)}% · {event['nthumbsup']} thumbs up · {waze_timestamp(event)}"
-        )
-        st.divider()
-
-with table_col:
-    st.markdown('<div class="section-header">Segment detail</div>', unsafe_allow_html=True)
-    table_df = pd.DataFrame({
-        "XD ID":        [s["xd_id"] for s in SEGMENTS],
-        "Road":         [s["road_name"] for s in SEGMENTS],
-        "Speed (mph)":  [s["current_speed"] for s in SEGMENTS],
-        "Ref (mph)":    [s["reference_speed"] for s in SEGMENTS],
-        "Hist avg":     [s["historical_avg_speed"] for s in SEGMENTS],
-        "vs Hist":      [f"{s['speed_vs_historical']:+.1f}" for s in SEGMENTS],
-        "% Free-flow":  [f"{round(s['congestion_ratio']*100)}%" for s in SEGMENTS],
-        "Severity":     [severity_label(s["severity"]) for s in SEGMENTS],
-        "Confidence":   [f"{round(s['confidence_score']*100)}%" for s in SEGMENTS],
-        "Miles":        [s["segment_miles"] for s in SEGMENTS],
-    })
-    st.dataframe(table_df, width='stretch', hide_index=True)
-
-# ---------------------------------------------------------------------------
-# Auto-refresh
-# ---------------------------------------------------------------------------
-
-st.caption("⏱ Auto-refreshes every 30 seconds. Click ↻ Refresh to update manually.")
-time.sleep(30)
-st.rerun()
+    st.caption(f"{len(filtered):,} segments · {filtered['miles'].sum():.2f} total miles")
