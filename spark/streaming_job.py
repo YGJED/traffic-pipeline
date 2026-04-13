@@ -51,7 +51,7 @@ spark = (
     .config("spark.hadoop.fs.s3a.connection.timeout", "60000")
     .config("spark.hadoop.fs.s3a.socket.timeout", "60000")
     .config("spark.hadoop.fs.s3a.fast.upload.buffer", "bytebuffer")
-    .config("spark.sql.shuffle.partitions", "4")
+    .config("spark.sql.shuffle.partitions", "8")
     .getOrCreate()
 )
 
