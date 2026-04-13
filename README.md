@@ -192,6 +192,7 @@ Note: reference `Tuning And Configuration` -> `Producer runtime flags` for more 
    - `congestion_by_segment/`
    - `network_congestion_pct/`
    - `congestion_by_road_type/`
+   - If this deletion removes the `live/` folder itself, recreate `live/` right away before restarting the pipeline.
 3. Restart Spark (`spark-app` at minimum)
 4. Re-run producer
 
