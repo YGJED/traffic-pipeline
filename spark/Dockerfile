@@ -5,6 +5,6 @@ USER root
 WORKDIR /app
 COPY . /app
 
-RUN pip install pyspark kafka-python
+RUN pip install --no-cache-dir kafka-python python-dotenv
 
-USER 1001
+USER spark

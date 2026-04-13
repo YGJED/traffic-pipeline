@@ -5,7 +5,11 @@
 
 
 ##### Preprocessing Instructions
-Put the NRIX dataset from Box into `/preprocessing-scripts` and run `prune.py` followed by `consolidate_parquet.py` followed by `upload_parquets.py`
+From the **repository root**, place the INRIX CSV under `data/` (see paths in `preprocessing-scripts/prune.py`) and run, in order:
+
+`python preprocessing-scripts/prune.py` → `python preprocessing-scripts/consolidate_parquet.py` → `python preprocessing-scripts/upload_parquets.py`
+
+For `airflow/scripts/spark_batch.py`, upload `XD_Identification.csv` to `s3://ndot-traffic-pipeline/raw/XD_Identification.csv` (same bucket as Parquet; not handled by `upload_parquets.py`).
 Create a `.env` file in the project (e.g. repo root) with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optional AWS_SESSION_TOKEN / AWS_REGION. load_dotenv() loads it when you run the script so boto3 sees those vars—no credentials in source code.
 
 TODO: 

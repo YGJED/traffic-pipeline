@@ -1,5 +1,3 @@
-version: '3.8'
-
 x-airflow-common: &airflow-common
   image: apache/airflow:2.10.3
   environment:
@@ -136,14 +134,17 @@ services:
 
   # -----------------------
   # SPARK MASTER
+  # (Official apache/spark image does not use SPARK_MODE; run Master explicitly.)
   # -----------------------
   spark-master:
     image: apache/spark:3.5.0
-    environment:
-      - SPARK_MODE=master
+    hostname: spark-master
     ports:
       - "7077:7077"
       - "8081:8080"
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
 
   # -----------------------
   # SPARK WORKER
@@ -152,9 +153,9 @@ services:
     image: apache/spark:3.5.0
     depends_on:
       - spark-master
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
 
   # -----------------------
   # SPARK STREAMING JOB
@@ -162,16 +163,24 @@ services:
   spark-app:
     build: ./spark
     depends_on:
-      - kafka
-      - spark-master
+      kafka:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
     environment:
+      - HADOOP_USER_NAME=spark
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=road-segments
+      # Streaming micro-batch progress in driver logs (streaming_job.py)
+      - SPARK_LOG_LEVEL=INFO
     volumes:
       - ./spark:/app
+      - ./.env:/app/.env
     command: >
-      spark-submit
+      /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
+      --conf spark.jars.ivy=/tmp/.ivy2
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4
       /app/streaming_job.py
 
   # -----------------------
