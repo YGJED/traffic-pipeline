@@ -1,19 +1,3 @@
-x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.3
-  environment:
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-  volumes:
-    - ./airflow/dags:/opt/airflow/dags
-    - ./airflow/logs:/opt/airflow/logs
-    - ./airflow/scripts:/opt/airflow/scripts
-  depends_on:
-    postgres:
-      condition: service_healthy
-
 services:
 
   # -----------------------
@@ -67,70 +51,18 @@ services:
   # -----------------------
   # KAFKA CONSUMER FOR TESTING
   # -----------------------
-  kafka-consumer:
-    build: ./producer
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      - KAFKA_BOOTSTRAP=kafka:9092
-      - KAFKA_TOPIC=road-segments
-    volumes:
-      - ./producer:/app
-      - ./.env:/app/.env
-    command: python consumer.py --bootstrap kafka:9092 --topic road-segments
-
-  # -----------------------
-  # POSTGRES (Airflow metadata DB)
-  # -----------------------
-  postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 5s
-      retries: 5
-
-  # -----------------------
-  # AIRFLOW INIT
-  # -----------------------
-  airflow-init:
-    <<: *airflow-common
-    command: >
-      bash -c "airflow db migrate &&
-               airflow users create
-               --username admin
-               --password admin
-               --firstname Admin
-               --lastname User
-               --role Admin
-               --email admin@example.com"
-    restart: "no"
-
-  # -----------------------
-  # AIRFLOW WEBSERVER
-  # -----------------------
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8080:8080"
-    depends_on:
-      - airflow-init
-    restart: always
-
-  # -----------------------
-  # AIRFLOW SCHEDULER
-  # -----------------------
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    depends_on:
-      - airflow-init
-    restart: always
+  # kafka-consumer:
+  #   build: ./producer
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   environment:
+  #     - KAFKA_BOOTSTRAP=kafka:9092
+  #     - KAFKA_TOPIC=road-segments
+  #   volumes:
+  #     - ./producer:/app
+  #     - ./.env:/app/.env
+  #   command: python consumer.py --bootstrap kafka:9092 --topic road-segments
 
   # -----------------------
   # SPARK MASTER

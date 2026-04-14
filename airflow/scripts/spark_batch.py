@@ -11,8 +11,10 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")
 
+S3_BUCKET = os.getenv("S3_BUCKET","ndot-traffic-pipeline")
+
 # Curated aggregation outputs (S3 console: s3://ndot-traffic-pipeline/historical/...)
-HISTORICAL_S3A = "s3a://ndot-traffic-pipeline/historical"
+HISTORICAL_S3A = 's3a://`{S3_BUCKET}/historical'
 
 spark = SparkSession.builder \
     .appName("traffic-batch") \
@@ -44,12 +46,12 @@ spark.sparkContext.setLogLevel("ERROR")
 
 # Read from S3 (data was uploaded with upload_parquets.py); hive-style partitions under raw/year=2023/month=*.
 df_inrix = spark.read.parquet(
-    "s3a://ndot-traffic-pipeline/raw/year=2023"
+    's3a://`{S3_BUCKET}/raw/year=2023'
 )
 
 # Join lookup file in raw/ on the same bucket (CSV, not Parquet).
 df_xd = spark.read.csv(
-    "s3a://ndot-traffic-pipeline/raw/XD_Identification.csv",
+    's3a://`{S3_BUCKET}/raw/XD_Identification.csv',
     header = True,
     inferSchema = True
 )

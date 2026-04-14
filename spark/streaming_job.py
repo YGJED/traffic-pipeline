@@ -23,16 +23,18 @@ AWS_SESSION_TOKEN     = os.getenv("AWS_SESSION_TOKEN")
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC     = os.getenv("KAFKA_TOPIC", "road-segments")
 
-S3_BUCKET = "ndot-traffic-pipeline"
+S3_BUCKET = os.getenv("S3_BUCKET", "ndot-traffic-pipeline")
 S3_LIVE   = f"s3a://{S3_BUCKET}/live"
 
 S3_BY_SEGMENT   = f"{S3_LIVE}/congestion_by_segment"
 S3_NETWORK_PCT  = f"{S3_LIVE}/network_congestion_pct"
 S3_BY_ROAD_TYPE = f"{S3_LIVE}/congestion_by_road_type"
+S3_LATEST_CONGESTION_BY_SEGMENT = f"{S3_LIVE}/latest_congestion_by_segment"
 
 CHECKPOINT_BY_SEGMENT   = f"{S3_LIVE}/checkpoints/by_segment"
 CHECKPOINT_NETWORK_PCT  = f"{S3_LIVE}/checkpoints/network_pct"
 CHECKPOINT_BY_ROAD_TYPE = f"{S3_LIVE}/checkpoints/by_road_type"
+CHECKPOINT_LATEST = f"{S3_LIVE}/checkpoints/latest_congestion_by_segment"
 
 # =========================
 # SPARK SESSION
@@ -51,7 +53,7 @@ spark = (
     .config("spark.hadoop.fs.s3a.connection.timeout", "60000")
     .config("spark.hadoop.fs.s3a.socket.timeout", "60000")
     .config("spark.hadoop.fs.s3a.fast.upload.buffer", "bytebuffer")
-    .config("spark.sql.shuffle.partitions", "4")
+    .config("spark.sql.shuffle.partitions", "8")
     .getOrCreate()
 )
 
@@ -259,6 +261,35 @@ agg_by_road_type = (
 )
 
 # =========================
+# SNAPSHOT SINK — Latest reading per segment
+# =========================
+# foreachBatch receives the micro-batch DataFrame already aggregated by
+# agg_by_segment. Within that batch there may be multiple windows per
+# xd_id (sliding windows overlap). We keep only the row with the newest
+# window_start, then overwrite a single small Parquet prefix so FastAPI
+# and Streamlit always read a fixed-size snapshot instead of growing files.
+
+def write_latest_snapshot(batch_df, batch_id):
+    if batch_df.isEmpty():
+        return
+
+    w = Window.partitionBy("xd_id").orderBy(col("window_start").desc())
+
+    latest = (
+        batch_df
+        .withColumn("rn", row_number().over(w))
+        .filter(col("rn") == 1)
+        .drop("rn")
+    )
+
+    (
+        latest.write
+        .mode("overwrite")
+        .parquet(S3_LATEST_BY_SEGMENT)
+    )
+
+
+# =========================
 # WRITE TO S3
 # =========================
 
@@ -291,6 +322,16 @@ query_by_road_type = (
     .format("parquet")
     .option("path", S3_BY_ROAD_TYPE)
     .option("checkpointLocation", CHECKPOINT_BY_ROAD_TYPE)
+    .trigger(processingTime=TRIGGER_INTERVAL)
+    .start()
+)
+
+query_latest_snapshot = (                                       # ← NEW
+    agg_by_segment
+    .writeStream
+    .outputMode("update")
+    .foreachBatch(write_latest_snapshot)
+    .option("checkpointLocation", CHECKPOINT_LATEST)
     .trigger(processingTime=TRIGGER_INTERVAL)
     .start()
 )

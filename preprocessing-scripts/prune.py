@@ -7,7 +7,7 @@ import os
 # CONFIG
 # =========================
 
-INPUT_CSV = "data/Davidson-2023-2024-for-NDOT-10-min-Ave/Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
+INPUT_CSV = "data/Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
 
 HIST_OUTPUT_DIR = "inrix_historical_parquet"
 STREAM_OUTPUT_DIR = "inrix_stream_parquet"

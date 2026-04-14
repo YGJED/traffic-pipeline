@@ -8,8 +8,10 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
 
-BUCKET = "ndot-traffic-pipeline"
+BUCKET = os.getenv("S3_BUCKET", "ndot-traffic-pipeline")
 S3_PREFIX = "raw/year=2023"
+
+print(BUCKET)
 
 def upload_parquet_structure(local_root, s3_prefix):
     for root, dirs, files in os.walk(local_root):
@@ -27,6 +29,7 @@ def upload_parquet_structure(local_root, s3_prefix):
                 month = month_part[0].split("=")[1]
 
                 s3_key = f"{s3_prefix}/month={month}/data.parquet"
+                print(s3_key)
 
                 print(f"Uploading {local_path} -> s3://{BUCKET}/{s3_key}")
                 s3.upload_file(local_path, BUCKET, s3_key)
@@ -39,4 +42,4 @@ def upload_all():
     upload_parquet_structure("inrix_stream_parquet/year=2023", S3_PREFIX)
 
 # run it
-# upload_all()
+upload_all()
