@@ -4,3 +4,4 @@ plotly==5.22.0
 folium==0.17.0
 streamlit-folium==0.22.0
 requests
+matplotlib
