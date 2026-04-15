@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+pyarrow
+boto3
+s3fs
+python-dotenv
+pyspark
+numpy

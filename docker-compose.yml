@@ -135,8 +135,17 @@ services:
     build: ./streamlit
     ports:
       - "8501:8501"
-    depends_on:
-      - kafka
     volumes:
       - ./streamlit:/app
     command: streamlit run app.py --server.address=0.0.0.0
+
+  # -----------------------
+  # FASTAPI API
+  # -----------------------
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app
+      - ./.env:/app/.env

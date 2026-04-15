@@ -3,6 +3,7 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from pathlib import Path
+import requests
 
 st.set_page_config(
     page_title="Davidson County — Road Network",
@@ -60,57 +61,57 @@ st.markdown("""
 # Load data
 # ---------------------------------------------------------------------------
 
-CSV_PATH = Path("XD_identification.csv")
+FASTAPI_URL = "http://api:8000/live/segments"  # Change if running elsewhere
 
-@st.cache_data
-def load_segments(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df.columns = df.columns.str.strip()
+@st.cache_data(ttl=30)
+def load_live_segments():
+    try:
+        resp = requests.get(FASTAPI_URL, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        df = pd.DataFrame(data)
+        # Ensure correct dtypes
+        df["avg_speed"] = pd.to_numeric(df["avg_speed"], errors="coerce")
+        df["avg_congestion"] = pd.to_numeric(df["avg_congestion"], errors="coerce")
+        df["reading_count"] = pd.to_numeric(df["reading_count"], errors="coerce")
+        df["frc"] = pd.to_numeric(df["frc"], errors="coerce")
+        df["start_lat"] = pd.to_numeric(df["start_lat"], errors="coerce")
+        df["start_long"] = pd.to_numeric(df["start_long"], errors="coerce")
+        df["end_lat"] = pd.to_numeric(df["end_lat"], errors="coerce")
+        df["end_long"] = pd.to_numeric(df["end_long"], errors="coerce")
+        df["window_start"] = pd.to_datetime(df["window_start"])
+        df["window_end"] = pd.to_datetime(df["window_end"])
+        return df
+    except Exception as e:
+        st.error(f"Failed to load live data: {e}")
+        return pd.DataFrame()
 
-    # Rename to safe internal names
-    df = df.rename(columns={
-        "xd":               "xd_id",
-        "road-name":        "road_name",
-        "road-num":         "road_num",
-        "bearing":          "bearing",
-        "miles":            "miles",
-        "frc":              "frc",
-        "county":           "county",
-        "state":            "state",
-        "zip":              "zip",
-        "timezone_name":    "timezone",
-        "start_latitude":   "start_lat",
-        "start_longitude":  "start_lon",
-        "end_latitude":     "end_lat",
-        "end_longitude":    "end_lon",
-    })
-
-    df["road_name"] = df["road_name"].fillna("").str.strip()
-    df["bearing"]   = df["bearing"].fillna("?").str.strip().str.upper()
-    df["display_name"] = df.apply(
-        lambda r: r["road_name"] if r["road_name"] else f"Segment {r['xd_id']}", axis=1
-    )
-    df["mid_lat"] = (df["start_lat"] + df["end_lat"]) / 2
-    df["mid_lon"] = (df["start_lon"] + df["end_lon"]) / 2
-    return df
-
-if not CSV_PATH.exists():
-    st.error(f"Could not find `{CSV_PATH}` — place it in the same directory as app.py.")
+df = load_live_segments()
+if df.empty:
     st.stop()
 
-df = load_segments(CSV_PATH)
+# Now use df for all filtering, mapping, and table display.
+# For example, to create a display_name:
+df["display_name"] = df["road_name"].fillna("").str.strip()
+df["display_name"] = df.apply(
+    lambda r: r["display_name"] if r["display_name"] else f"Segment {r['xd_id']}", axis=1
+)
+# Remove miles, zip, county, state, mid_lat, mid_long (not present in snapshot)
+df["mid_lat"] = (df["start_lat"] + df["end_lat"]) / 2
+df["mid_long"] = (df["start_long"] + df["end_long"]) / 2
 
 # ---------------------------------------------------------------------------
-# Bearing → color + lateral offset so N/S and E/W pairs don't overlap
-# ---------------------------------------------------------------------------
 
-BEARING_COLORS = {
-    "N": "#2563eb",   # blue
-    "S": "#dc2626",   # red
-    "E": "#16a34a",   # green
-    "W": "#d97706",   # amber
-    "?": "#6b7280",   # gray fallback
-}
+# Congestion score → color (green = low, yellow = moderate, red = high)
+def congestion_color(score):
+    if pd.isna(score):
+        return "#cccccc"  # gray for missing
+    if score < 0.15:
+        return "#16a34a"  # green
+    elif score < 0.3:
+        return "#facc15"  # yellow
+    else:
+        return "#dc2626"  # red
 
 # Offset in degrees (~10–15 m) perpendicular to travel direction
 OFFSET = 0.00012
@@ -130,21 +131,25 @@ def frc_weight(frc):
 def offset_coords(row):
     dlat, dlon = BEARING_OFFSET.get(row["bearing"], (0, 0))
     return [
-        [row["start_lat"] + dlat, row["start_lon"] + dlon],
-        [row["end_lat"]   + dlat, row["end_lon"]   + dlon],
+        [row["start_lat"] + dlat, row["start_long"] + dlon],
+        [row["end_lat"]   + dlat, row["end_long"]   + dlon],
     ]
 
 # ---------------------------------------------------------------------------
 # Sidebar filters
 # ---------------------------------------------------------------------------
 
+
 with st.sidebar:
     st.markdown("### Filters")
 
-    all_bearings = sorted(df["bearing"].unique())
-    sel_bearings = st.multiselect(
-        "Bearing", all_bearings, default=all_bearings,
-        help="Filter by travel direction"
+    # Road name filter
+    road_names = sorted(df["display_name"].unique())
+    sel_road = st.selectbox(
+        "Road name (optional)",
+        ["(All roads)"] + road_names,
+        index=0,
+        help="Show only segments for a specific road name"
     )
 
     frc_min, frc_max = int(df["frc"].min()), int(df["frc"].max())
@@ -155,13 +160,13 @@ with st.sidebar:
 
     st.markdown("---")
     show_labels = st.toggle("Show speed labels on map", value=False)
-    show_table  = st.toggle("Show segment table", value=True)
 
 # Apply filters
 mask = (
-    df["bearing"].isin(sel_bearings) &
     df["frc"].between(sel_frc[0], sel_frc[1])
 )
+if sel_road != "(All roads)":
+    mask = mask & (df["display_name"] == sel_road)
 
 filtered = df[mask].copy()
 
@@ -180,25 +185,17 @@ st.markdown(f"""
 # Stat cards
 # ---------------------------------------------------------------------------
 
+
 c1, c2, c3, c4, c5 = st.columns(5)
+avg_cong = filtered["avg_congestion"].mean() if not filtered.empty else float('nan')
 stats = [
-    (c1, len(filtered),                              "Segments shown"),
-    (c5, ", ".join(sorted(filtered["bearing"].unique())), "Bearings"),
+    (c1, len(filtered), "Segments shown"),
+    (c2, f"{avg_cong:.2f}" if pd.notna(avg_cong) else "–", "Avg. congestion"),
 ]
 for col, val, lbl in stats:
     col.markdown(f'<div class="stat-card"><div class="val">{val}</div><div class="lbl">{lbl}</div></div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
-
-# ---------------------------------------------------------------------------
-# Bearing legend
-# ---------------------------------------------------------------------------
-
-pills = "".join(
-    f'<span class="bearing-pill" style="background:{BEARING_COLORS[b]}">{b}</span> {b}ound &nbsp;&nbsp;'
-    for b in ["N", "S", "E", "W"] if b in df["bearing"].values
-)
-st.markdown(f'<div class="bearing-legend">{pills}</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Map
@@ -209,7 +206,7 @@ if filtered.empty:
     st.stop()
 
 center_lat = filtered["mid_lat"].mean()
-center_lon = filtered["mid_lon"].mean()
+center_lon = filtered["mid_long"].mean()
 
 fmap = folium.Map(
     location=[center_lat, center_lon],
@@ -219,26 +216,23 @@ fmap = folium.Map(
 )
 
 for _, row in filtered.iterrows():
-    color  = BEARING_COLORS.get(row["bearing"], "#6b7280")
+    color  = congestion_color(row.get("avg_congestion", None))
     weight = frc_weight(row["frc"])
     coords = offset_coords(row)
 
     road_label = row["display_name"]
-    road_num   = str(row["road_num"]).strip() if pd.notna(row["road_num"]) else ""
-    full_name  = f"{road_label} ({road_num})" if road_num else road_label
+    full_name  = road_label
 
     popup_html = f"""
-    <div style="font-family:'IBM Plex Mono',monospace;min-width:200px;font-size:12px;line-height:1.7">
-      <b style="font-size:13px;font-family:'IBM Plex Sans',sans-serif">{full_name}</b><br>
-      <span style="color:{color};font-weight:600">▶ {row['bearing']}-bound</span><br>
-      <hr style="margin:5px 0;border-color:#eee">
-      <span style="color:#777">XD ID:</span> {row['xd_id']}<br>
-      <span style="color:#777">Length:</span> {row['miles']:.3f} mi<br>
-      <span style="color:#777">FRC:</span> {int(row['frc']) if pd.notna(row['frc']) else '?'}<br>
-      <span style="color:#777">ZIP:</span> {row['zip']}<br>
-      <span style="color:#777">County:</span> {row['county']}, {row['state']}<br>
-      <span style="color:#777">Start:</span> {row['start_lat']:.5f}, {row['start_lon']:.5f}<br>
-      <span style="color:#777">End:</span> {row['end_lat']:.5f}, {row['end_lon']:.5f}
+    <div style=\"font-family:'IBM Plex Mono',monospace;min-width:200px;font-size:12px;line-height:1.7\">
+      <b style=\"font-size:13px;font-family:'IBM Plex Sans',sans-serif\">{full_name}</b><br>
+      <span style=\"color:{color};font-weight:600\">▶ {row['bearing']}-bound</span><br>
+      <hr style=\"margin:5px 0;border-color:#eee\">
+      <span style=\"color:#777\">XD ID:</span> {row['xd_id']}<br>
+      <span style=\"color:#777\">Congestion:</span> {row['avg_congestion']:.2f}<br>
+      <span style=\"color:#777\">FRC:</span> {int(row['frc']) if pd.notna(row['frc']) else '?'}<br>
+      <span style=\"color:#777\">Start:</span> {row['start_lat']:.5f}, {row['start_long']:.5f}<br>
+      <span style=\"color:#777\">End:</span> {row['end_lat']:.5f}, {row['end_long']:.5f}
     </div>
     """
 
@@ -248,13 +242,13 @@ for _, row in filtered.iterrows():
         weight=weight,
         opacity=0.85,
         popup=folium.Popup(popup_html, max_width=250),
-        tooltip=f"{full_name} · {row['bearing']}-bound · {row['miles']:.2f} mi",
+        tooltip=f"{full_name} · {row['bearing']}-bound · Cong: {row['avg_congestion']:.2f}",
     ).add_to(fmap)
 
     # Optional midpoint label (XD ID)
     if show_labels:
         folium.Marker(
-            location=[row["mid_lat"], row["mid_lon"]],
+            location=[row["mid_lat"], row["mid_long"]],
             icon=folium.DivIcon(
                 html=f'<div style="font-size:8px;font-family:monospace;color:#1a1a2e;white-space:nowrap;'
                      f'background:rgba(255,255,255,0.75);padding:1px 3px;border-radius:2px">'
@@ -264,56 +258,22 @@ for _, row in filtered.iterrows():
             ),
         ).add_to(fmap)
 
+
 # Map legend
 legend_html = """
-<div style="position:fixed;bottom:24px;left:24px;z-index:1000;
-     background:white;padding:12px 16px;border-radius:6px;
-     border:1px solid #ddd;font-family:'IBM Plex Mono',monospace;font-size:11px;
-     box-shadow:0 2px 8px rgba(0,0,0,0.1)">
-  <b style="font-size:12px">Bearing</b><br>
-  <span style="color:#2563eb">━━</span> Northbound<br>
-  <span style="color:#dc2626">━━</span> Southbound<br>
-  <span style="color:#16a34a">━━</span> Eastbound<br>
-  <span style="color:#d97706">━━</span> Westbound<br>
-  <br>
-  <b style="font-size:12px">Line weight</b><br>
-  Thicker = higher road class
+<div style=\"position:fixed;bottom:24px;left:24px;z-index:1000;
+         background:white;padding:12px 16px;border-radius:6px;
+         border:1px solid #ddd;font-family:'IBM Plex Mono',monospace;font-size:11px;
+         box-shadow:0 2px 8px rgba(0,0,0,0.1)\">
+    <b style=\"font-size:12px\">Congestion</b><br>
+    <span style=\"color:#16a34a\">━━</span> Low (&lt; 0.15)<br>
+    <span style=\"color:#facc15\">━━</span> Moderate (0.15–0.3)<br>
+    <span style=\"color:#dc2626\">━━</span> High (&ge; 0.3)<br>
+    <br>
+    <b style=\"font-size:12px\">Line weight</b><br>
+    Thicker = higher road class
 </div>
 """
 fmap.get_root().html.add_child(folium.Element(legend_html))
 
 st_folium(fmap, height=560, width="stretch", returned_objects=[])
-
-# ---------------------------------------------------------------------------
-# Segment table
-# ---------------------------------------------------------------------------
-
-if show_table:
-    st.markdown("---")
-    st.markdown("#### Segment detail")
-
-    table_df = filtered[[
-        "xd_id", "display_name", "bearing", "miles", "frc",
-        "zip", "start_lat", "start_lon", "end_lat", "end_lon"
-    ]].copy()
-
-    table_df.columns = [
-        "XD ID", "Road", "Bearing", "Miles", "FRC",
-        "ZIP", "Start Lat", "Start Lon", "End Lat", "End Lon"
-    ]
-    table_df["Miles"] = table_df["Miles"].round(4)
-
-    st.dataframe(
-        table_df,
-        width=True,
-        hide_index=True,
-        column_config={
-            "XD ID":    st.column_config.TextColumn(width="medium"),
-            "Road":     st.column_config.TextColumn(width="large"),
-            "Bearing":  st.column_config.TextColumn(width="small"),
-            "Miles":    st.column_config.NumberColumn(width="small", format="%.4f"),
-            "FRC":      st.column_config.NumberColumn(width="small"),
-        }
-    )
-
-    st.caption(f"{len(filtered):,} segments · {filtered['miles'].sum():.2f} total miles")
