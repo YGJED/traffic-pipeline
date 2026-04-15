@@ -310,6 +310,7 @@ query_by_segment = (
     .option("path", S3_BY_SEGMENT)
     .option("checkpointLocation", CHECKPOINT_BY_SEGMENT)
     .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
     .start()
 )
 
@@ -321,6 +322,7 @@ query_network_pct = (
     .option("path", S3_NETWORK_PCT)
     .option("checkpointLocation", CHECKPOINT_NETWORK_PCT)
     .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
     .start()
 )
 
@@ -332,6 +334,7 @@ query_by_road_type = (
     .option("path", S3_BY_ROAD_TYPE)
     .option("checkpointLocation", CHECKPOINT_BY_ROAD_TYPE)
     .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
     .start()
 )
 

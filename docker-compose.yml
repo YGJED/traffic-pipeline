@@ -100,6 +100,8 @@ services:
       - spark-master
     command: >
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      --cores 2
+      --memory 2g
       spark://spark-master:7077
 
   # -----------------------
@@ -128,6 +130,34 @@ services:
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4
       /app/streaming_job.py
 
+
+  # -----------------------
+  # SPARK BATCH JOB (TEMP)
+  #------------------------
+  spark-batch:
+    build: ./spark
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+    environment:
+      - HADOOP_USER_NAME=spark
+      - SPARK_LOG_LEVEL=INFO
+    volumes:
+      - ./spark:/app
+      - ./.env:/app/.env
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --executor-memory 1g
+      --driver-memory 512m
+      --total-executor-cores 2
+      --conf spark.jars.ivy=/tmp/.ivy2
+      --packages org.apache.hadoop:hadoop-aws:3.3.4
+      /app/spark_batch.py
+
+
   # -----------------------
   # STREAMLIT DASHBOARD
   # -----------------------
@@ -137,7 +167,7 @@ services:
       - "8501:8501"
     volumes:
       - ./streamlit:/app
-    command: streamlit run app.py --server.address=0.0.0.0
+    command: streamlit run main.py --server.address=0.0.0.0
 
   # -----------------------
   # FASTAPI API
