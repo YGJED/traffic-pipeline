@@ -1,15 +1,23 @@
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.3
+  build: ./airflow
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    # Same value on webserver + scheduler so the UI can fetch worker/task logs (avoids 403 FORBIDDEN on log URLs).
+    AIRFLOW__WEBSERVER__SECRET_KEY: traffic-pipeline-local-dev-airflow-secret-key
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/scripts:/opt/airflow/scripts
+    - .:/opt/airflow/repo
+    - ./.env:/opt/airflow/.env
+    - ./data:/opt/airflow/data
+    - ./inrix_historical_parquet:/opt/airflow/inrix_historical_parquet
+    - ./inrix_stream_parquet:/opt/airflow/inrix_stream_parquet
+    - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:
       condition: service_healthy
@@ -56,12 +64,14 @@ services:
     build: ./producer
     depends_on:
       - kafka
+    env_file:
+      # Inject creds as env vars (no bind mount). Mounting ./.env into /app/.env breaks when
+      # compose runs from Airflow: the daemon may treat the source path as a dir or wrong type.
+      - .env
     environment:
       - KAFKA_BOOTSTRAP=kafka:9092
       - KAFKA_TOPIC=road-segments
-    volumes:
-      - ./producer:/app
-      - ./.env:/app/.env
+    # No volumes: see env_file above and streaming_dag --build for producer source.
     command: tail -f /dev/null
 
   # -----------------------
@@ -72,12 +82,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       - KAFKA_BOOTSTRAP=kafka:9092
       - KAFKA_TOPIC=road-segments
     volumes:
+      # Local/dev helper service: keep bind mount for quick consumer.py edits from host.
+      # (Unlike producer-app, this service is not used by Airflow DAG orchestration.)
       - ./producer:/app
-      - ./.env:/app/.env
     command: python consumer.py --bootstrap kafka:9092 --topic road-segments
 
   # -----------------------
@@ -101,13 +114,7 @@ services:
     <<: *airflow-common
     command: >
       bash -c "airflow db migrate &&
-               airflow users create
-               --username admin
-               --password admin
-               --firstname Admin
-               --lastname User
-               --role Admin
-               --email admin@example.com"
+               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
     restart: "no"
 
   # -----------------------
@@ -167,15 +174,14 @@ services:
         condition: service_healthy
       spark-master:
         condition: service_started
+    env_file:
+      - .env
     environment:
       - HADOOP_USER_NAME=spark
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_TOPIC=road-segments
       # Streaming micro-batch progress in driver logs (streaming_job.py)
       - SPARK_LOG_LEVEL=INFO
-    volumes:
-      - ./spark:/app
-      - ./.env:/app/.env
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077

@@ -6,9 +6,9 @@ End-to-end traffic analytics project for Davidson County using INRIX data.
 
 | Pipeline | Purpose | Main Script | Output |
 |---|---|---|---|
-| Preprocessing | Convert raw CSV into partitioned Parquet and upload to S3 | `preprocessing-scripts/*.py` | `s3://ndot-traffic-pipeline/raw/...` |
+| Preprocessing | Convert raw CSV into partitioned Parquet and upload to S3 | `preprocessing-scripts/*.py` (local), mirrored in `airflow/scripts/*.py` for DAG tasks | `s3://ndot-traffic-pipeline/raw/...` |
 | Streaming | Replay time slices to Kafka and compute live Spark metrics | `producer/producer.py` + `spark/streaming_job.py` | `s3://ndot-traffic-pipeline/live/...` |
-| Batch | Run historical aggregations with Spark | `airflow/scripts/spark_batch.py` | `s3://ndot-traffic-pipeline/historical/...` |
+| Batch | Run historical aggregations with Spark | `spark/spark_batch.py` (local), mirrored in `airflow/scripts/spark_batch.py` for DAG tasks | `s3://ndot-traffic-pipeline/historical/...` |
 
 ---
 
@@ -34,12 +34,21 @@ S3 raw/ + XD_Identification.csv -> spark_batch.py
 
 ## Repository Layout
 
-- `preprocessing-scripts/` - CSV -> Parquet -> S3 preparation scripts
-- `producer/` - Kafka producer + debug consumer
-- `spark/` - Spark Structured Streaming app
-- `airflow/` - Airflow services + batch Spark script
+- `producer/` - Kafka producer + debug consumer image
+- `spark/` - Spark Structured Streaming app image
+- `airflow/dags/` - orchestration DAGs (`preprocessing_pipeline`, `batch_pipeline`, `streaming_pipeline`)
+- `airflow/scripts/` - Airflow task copies/wrappers of preprocessing + batch scripts
+- `airflow/` - Airflow image/Dockerfile
 - `streamlit/` - dashboard app
-- `docker-compose.yml` - service orchestration
+- `docker-compose.yml` - service orchestration for both local and Airflow-driven runs
+
+### Local vs Airflow execution model (important)
+
+- **Local/manual runs**: you execute `docker compose ...` from your terminal at repo root.
+- **Airflow runs**: the DAG executes `docker compose ...` from inside `/opt/airflow/repo` (mounted repo) via `/var/run/docker.sock`.
+- Because of that, this repo intentionally separates some behavior:
+  - `producer-app` and `spark-app` rely on image builds (`--build`) instead of source bind mounts, so DAG runs are deterministic.
+  - `kafka-consumer` keeps a source bind mount for local debugging convenience only.
 
 ---
 
@@ -96,22 +105,24 @@ If you run Spark in Docker (`spark-app`), you usually do not need local Spark se
 
 ---
 
-## One-Time Data Preparation (For Both Pipelines)
+## Local Testing
+
+### Data Ingestion
 
 1. Put CSV at:
    - `data/Davidson-2023-2024-for-NDOT-10-min-Ave/Davidson-2023-2024-for-NDOT-10-min-Ave.csv`
 
-2. Build local parquet partitions:
+2. Build local parquet partitions (local script paths):
 
 ```powershell
 python preprocessing-scripts/prune.py
 python preprocessing-scripts/consolidate_parquet.py
 ```
 
-3. Upload partitioned parquet to S3:
+3. Upload partitioned parquet to S3 (local script path):
 
 ```powershell
-python -c "from preprocessing-scripts.upload_parquets import upload_all; upload_all()"
+python preprocessing-scripts/upload_parquets.py
 ```
 
 4. Upload lookup file used by Spark:
@@ -120,7 +131,7 @@ python -c "from preprocessing-scripts.upload_parquets import upload_all; upload_
 
 ---
 
-## Streaming Pipeline Runbook
+### Streaming
 
 ### Correct Startup Order (Important)
 
@@ -129,7 +140,7 @@ Spark uses `startingOffsets=latest`, so startup order matters.
 1. Start Kafka + Zookeeper:
 
 ```powershell
-docker compose up -d zookeeper kafka
+docker compose -p traffic-pipeline up -d zookeeper kafka
 ```
 
 2. Ensure Kafka topic exists (recommended before Spark startup).
@@ -137,8 +148,8 @@ docker compose up -d zookeeper kafka
 Even with `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true`, Spark can still fail on startup if the topic is not ready yet. Create and verify explicitly:
 
 ```powershell
-docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --create --topic road-segments --partitions 16 --replication-factor 1
-docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --describe --topic road-segments
+docker compose -p traffic-pipeline exec kafka kafka-topics --bootstrap-server kafka:9092 --create --topic road-segments --partitions 16 --replication-factor 1
+docker compose -p traffic-pipeline exec kafka kafka-topics --bootstrap-server kafka:9092 --describe --topic road-segments
 ```
 
 Note: review `Tuning And Configuration` -> `Kafka topic partitions` for partition-count guidance.
@@ -146,26 +157,36 @@ Note: review `Tuning And Configuration` -> `Kafka topic partitions` for partitio
 3. Start Spark services:
 
 ```powershell
-docker compose up -d spark-master spark-worker spark-app
+docker compose -p traffic-pipeline up -d spark-master spark-worker
+docker compose -p traffic-pipeline up -d --build --force-recreate spark-app
 ```
 
 4. Wait for Spark streaming startup:
 
 ```powershell
-docker compose logs -f spark-app
+docker compose -p traffic-pipeline logs -f spark-app
 ```
 
-Spark is ready when you see idle messages like:
+Spark is ready when you see startup lines like:
 
 ```text
 INFO MicroBatchExecution: Streaming query has been idle and waiting for new data more than 10000 ms.
+```
+```text
+INFO StandaloneAppClient$ClientEndpoint: Executor updated: ... is now RUNNING
+```
+
+You may also see (depending on log mode/version):
+
+```text
+Batch: 0
 ```
 
 5. Run producer after Spark is ready:
 
 ```powershell
-docker compose up -d producer-app
-docker compose exec producer-app python producer.py --start-time 2023-01-01T00:00:00 --end-time 2023-01-02T00:00:00 --emit-mode verbose --slice-delay 1
+docker compose -p traffic-pipeline up -d --build producer-app
+docker compose -p traffic-pipeline exec producer-app python producer.py --start-time 2023-01-01T00:00:00 --end-time 2023-01-02T00:00:00 --emit-mode verbose --slice-delay 1
 ```
 
 Note: reference `Tuning And Configuration` -> `Producer runtime flags` for more details on producer options.
@@ -205,9 +226,11 @@ Usually no need to restart Kafka/Zookeeper unless unhealthy.
 
 ---
 
-## Batch Pipeline Runbook
+### Batch
 
-Batch script: `airflow/scripts/spark_batch.py`
+Batch script:
+- local: `spark/spark_batch.py`
+- Airflow DAG task copy: `airflow/scripts/spark_batch.py`
 
 ### What it does
 
@@ -219,8 +242,46 @@ Batch script: `airflow/scripts/spark_batch.py`
 ### Run Batch Job (Local Python)
 
 ```powershell
-python airflow/scripts/spark_batch.py
+python spark/spark_batch.py
 ```
+
+---
+
+## Airflow Usage
+
+Use these commands from repo root.
+
+1. Build Airflow services:
+
+```powershell
+docker compose build airflow-webserver airflow-scheduler airflow-init
+```
+
+2. Start metadata DB and run init/migrations:
+
+```powershell
+docker compose up -d postgres airflow-init
+```
+
+3. Start webserver + scheduler:
+
+```powershell
+docker compose up -d airflow-webserver airflow-scheduler
+```
+
+4. Open Airflow UI:
+   - URL: [http://localhost:8080](http://localhost:8080)
+   - Login: `admin` / `admin`
+
+5. You should see three DAGs:
+   - `preprocessing_pipeline`
+   - `batch_pipeline`
+   - `streaming_pipeline`
+
+Notes:
+
+- `streaming_pipeline` runs docker compose commands from inside Airflow (`/opt/airflow/repo`).
+- For streaming tasks, DAG commands rebuild app images (`spark-app`, `producer-app`) so code changes are picked up.
 
 ---
 
@@ -253,7 +314,7 @@ docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --alter --t
 Configured in `spark/streaming_job.py`:
 
 ```python
-.config("spark.sql.shuffle.partitions", "4")
+.config("spark.sql.shuffle.partitions", "8")
 ```
 
 This controls Spark shuffle parallelism for joins/groupBy/window aggregations.
