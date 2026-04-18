@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+import json
 from pathlib import Path
 import requests
 import sys, os
@@ -192,49 +193,33 @@ fmap = folium.Map(
     prefer_canvas=True,
 )
 
+features = []
 for _, row in filtered.iterrows():
-    color  = congestion_color(row.get("avg_congestion", None))
-    weight = frc_weight(row["frc"])
     coords = offset_coords(row)
+    features.append({
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[c[1], c[0]] for c in coords],  # lon, lat
+        },
+        "properties": {
+            "color": congestion_color(row.get("avg_congestion")),
+            "weight": frc_weight(row["frc"]),
+            "tooltip": f"{row['display_name']} · {row['bearing']}-bound · Cong: {row['avg_congestion']:.2f}",
+        }
+    })
 
-    road_label = row["display_name"]
-    full_name  = road_label
+geojson = {"type": "FeatureCollection", "features": features}
 
-    popup_html = f"""
-    <div style=\"font-family:'IBM Plex Mono',monospace;min-width:200px;font-size:12px;line-height:1.7\">
-      <b style=\"font-size:13px;font-family:'IBM Plex Sans',sans-serif\">{full_name}</b><br>
-      <span style=\"color:{color};font-weight:600\">▶ {row['bearing']}-bound</span><br>
-      <hr style=\"margin:5px 0;border-color:#eee\">
-      <span style=\"color:#777\">XD ID:</span> {row['xd_id']}<br>
-      <span style=\"color:#777\">Congestion:</span> {row['avg_congestion']:.2f}<br>
-      <span style=\"color:#777\">FRC:</span> {int(row['frc']) if pd.notna(row['frc']) else '?'}<br>
-      <span style=\"color:#777\">Start:</span> {row['start_lat']:.5f}, {row['start_long']:.5f}<br>
-      <span style=\"color:#777\">End:</span> {row['end_lat']:.5f}, {row['end_long']:.5f}
-    </div>
-    """
-
-    folium.PolyLine(
-        locations=coords,
-        color=color,
-        weight=weight,
-        opacity=0.85,
-        popup=folium.Popup(popup_html, max_width=250),
-        tooltip=f"{full_name} · {row['bearing']}-bound · Cong: {row['avg_congestion']:.2f}",
-    ).add_to(fmap)
-
-    # Optional midpoint label (XD ID)
-    if show_labels:
-        folium.Marker(
-            location=[row["mid_lat"], row["mid_long"]],
-            icon=folium.DivIcon(
-                html=f'<div style="font-size:8px;font-family:monospace;color:#1a1a2e;white-space:nowrap;'
-                     f'background:rgba(255,255,255,0.75);padding:1px 3px;border-radius:2px">'
-                     f'{row["xd_id"]}</div>',
-                icon_size=(80, 16),
-                icon_anchor=(40, 8),
-            ),
-        ).add_to(fmap)
-
+folium.GeoJson(
+    geojson,
+    style_function=lambda f: {
+        "color": f["properties"]["color"],
+        "weight": f["properties"]["weight"],
+        "opacity": 0.85,
+    },
+    tooltip=folium.GeoJsonTooltip(fields=["tooltip"]),
+).add_to(fmap)
 
 # Map legend
 legend_html = """

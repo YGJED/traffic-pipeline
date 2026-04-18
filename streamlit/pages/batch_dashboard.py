@@ -2,73 +2,60 @@ import streamlit as st
 import pandas as pd
 import requests
 import os
+import plotly.express as px
 
 API_BASE = os.environ.get("API_BASE", "http://api:8000")
-
-@st.cache_data(ttl=600)
-def fetch_historical(folder: str, year: int, month: int) -> pd.DataFrame:
-    try:
-        resp = requests.get(
-            f"{API_BASE}/historical/{folder}",
-            params={"year": year, "month": month},
-            timeout=30,
-        )
-        if resp.status_code == 404:
-            return pd.DataFrame()
-        resp.raise_for_status()
-        return pd.DataFrame(resp.json())
-    except Exception as e:
-        st.error(f"Failed to load '{folder}' for {year}-{month:02d}: {e}")
-        return pd.DataFrame()
-
-import requests
-import pandas as pd
-import streamlit as st
-
-@st.cache_data(ttl=600)
-def load_year(year: int) -> dict[str, pd.DataFrame]:
-    folders = ["by_hour", "by_day_of_week", "by_road_type", "by_direction", "top_segments"]
-    combined = {f: [] for f in folders}
-
-    for month in range(1, 13):
-        for folder in folders:
-            try:
-                res = requests.get(
-                    f"{API_BASE}/historical/{folder}",
-                    params={"year": year, "month": month},
-                    timeout=5
-                )
-
-                if res.status_code == 200:
-                    data = res.json()
-                    if data:  # avoid empty responses
-                        df = pd.DataFrame(data)
-                        df["month"] = month
-                        combined[folder].append(df)
-
-            except requests.exceptions.RequestException:
-                print("EXCEPTION")
-                continue  # skip failures (optional: log)
-
-    return {
-        folder: pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        for folder, frames in combined.items()
-    }
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 MONTH_LABELS = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
 }
 
+# Slideshow pages — top_segments is always rendered separately below
+# We added a "type" key to distinguish between standard line/bars and our custom visual layouts
+SLIDESHOW_PAGES = [
+    # {"key": "by_hour",        "title": "Speed by Hour of Day",  "group_col": "hour", "type": "standard"},
+    # {"key": "by_day_of_week", "title": "Speed by Day of Week",  "group_col": "day_of_week", "type": "standard"},
+    {"key": "by_hour",        "title": "Rush Hour Shift Heatmap", "type": "heatmap"},
+    {"key": "by_day_of_week", "title": "Weekend vs Weekday Seasonality", "type": "seasonality"},
+    {"key": "by_road_type",   "title": "Speed by Road Type",    "group_col": "road_type", "type": "standard"},
+    {"key": "by_direction",   "title": "Speed by Direction",    "group_col": "direction", "type": "standard"},
+]
+
+# ---------------------------------------------------------------------------
+# Lazy per-folder, per-month loader
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_folder_month(folder: str, year: int, month: int) -> pd.DataFrame:
+    try:
+        res = requests.get(
+            f"{API_BASE}/historical/{folder}",
+            params={"year": year, "month": month},
+            timeout=5,
+        )
+        if res.status_code == 200:
+            data = res.json()
+            if data:
+                df = pd.DataFrame(data)
+                df["month"] = month
+                return df
+    except requests.exceptions.RequestException:
+        pass
+    return pd.DataFrame()
+
+
+def load_folder(folder: str, year: int, months: list[int]) -> pd.DataFrame:
+    """Fetch and concatenate a single folder across the requested months."""
+    frames = [fetch_folder_month(folder, year, m) for m in months]
+    frames = [f for f in frames if not f.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def month_over_month(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
-    """
-    Pivot a concatenated df so each row is a month and each column is a
-    group value, with avg_speed as the cell value. Adds a delta column
-    showing change vs the previous month.
-    """
     if df.empty or group_col not in df.columns:
         return pd.DataFrame()
     pivot = (
@@ -81,138 +68,64 @@ def month_over_month(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return pivot
 
 def delta_table(pivot: pd.DataFrame) -> pd.DataFrame:
-    """Return month-over-month difference for a pivot table."""
     return pivot.diff()
 
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
-years = [2023]
-
 with st.sidebar:
     st.markdown("### Settings")
-    sel_year = st.selectbox("Year", years, index=0)
+    sel_year = st.selectbox("Year", [2023], index=0)
 
     st.divider()
-    st.markdown("### Drill Into Month")
+    st.markdown("### Filter by Month")
     drill_month = st.selectbox(
-        "Month (optional)",
+        "Month",
         [None] + list(range(1, 13)),
-        format_func=lambda m: "— Year overview —" if m is None else f"{MONTH_LABELS[m]} {sel_year}",
+        format_func=lambda m: "Full year overview" if m is None else f"{MONTH_LABELS[m]} {sel_year}",
     )
+    if drill_month is None:
+        st.caption("Use ← → arrows to cycle through charts.")
 
 # ---------------------------------------------------------------------------
-# Load data
+# Shared state
 # ---------------------------------------------------------------------------
 
-with st.spinner("Loading full year…"):
-    year_data = load_year(sel_year)
+if "page_idx" not in st.session_state:
+    st.session_state.page_idx = 0
 
-# ---------------------------------------------------------------------------
-# Page
-# ---------------------------------------------------------------------------
+# Clamp in case SLIDESHOW_PAGES changes length
+st.session_state.page_idx = min(st.session_state.page_idx, len(SLIDESHOW_PAGES) - 1)
 
-if drill_month is None:
-    st.title(f"📊 {sel_year} — Year Overview")
-    st.caption("Showing month-over-month trends. Pick a month in the sidebar to drill in.")
+months_to_load = [drill_month] if drill_month else list(range(1, 13))
 
-    # --- Speed by Hour (heatmap-style pivot) ---
-    st.subheader("Avg Speed by Hour — Monthly Trend")
-    df = year_data["by_hour"]
-    if not df.empty:
-        pivot = month_over_month(df, "hour")
-        if not pivot.empty:
-            st.line_chart(pivot)
-            with st.expander("Month-over-month Δ speed (by hour)"):
-                deltas = delta_table(pivot).dropna()
-                st.dataframe(deltas.style.background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
-    else:
-        st.info("No data available.")
+# ===========================================================================
+# MONTH DRILL-DOWN: all charts on one page, no slideshow
+# ===========================================================================
 
-    st.divider()
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.subheader("Avg Speed by Day of Week")
-        df = year_data["by_day_of_week"]
-        if not df.empty:
-            pivot = month_over_month(df, "day_of_week")
-            if not pivot.empty:
-                st.line_chart(pivot)
-                with st.expander("Month-over-month Δ"):
-                    st.dataframe(delta_table(pivot).dropna().style.background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
-        else:
-            st.info("No data available.")
-
-    with c2:
-        st.subheader("Avg Speed by Direction")
-        df = year_data["by_direction"]
-        if not df.empty:
-            pivot = month_over_month(df, "direction")
-            if not pivot.empty:
-                st.line_chart(pivot)
-                with st.expander("Month-over-month Δ"):
-                    st.dataframe(delta_table(pivot).dropna().style.background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
-        else:
-            st.info("No data available.")
-
-    st.divider()
-
-    st.subheader("Avg Speed by Road Type — Monthly")
-    df = year_data["by_road_type"]
-    if not df.empty:
-        pivot = month_over_month(df, "road_type")
-        if not pivot.empty:
-            st.bar_chart(pivot)
-            with st.expander("Month-over-month Δ"):
-                st.dataframe(delta_table(pivot).dropna().style.background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
-    else:
-        st.info("No data available.")
-
-    st.divider()
-
-    st.subheader("Most Congested Segments — Avg Across Year")
-    df = year_data["top_segments"]
-    if not df.empty:
-        summary = (
-            df.groupby(["xd_id", "road-name", "frc"])
-            .agg(avg_congestion=("avg_congestion", "mean"), avg_speed=("avg_speed", "mean"))
-            .reset_index()
-            .sort_values("avg_congestion", ascending=False)
-            .head(20)
-        )
-        st.dataframe(summary, use_container_width=True)
-    else:
-        st.info("No data available.")
-
-# ---------------------------------------------------------------------------
-# Drill-down: single month
-# ---------------------------------------------------------------------------
-else:
+if drill_month is not None:
     month_label = MONTH_LABELS[drill_month]
     st.title(f"📊 {month_label} {sel_year} — Detail")
-    st.caption("Showing single-month breakdown. Change the sidebar to return to the year overview.")
-
-    def single_month(folder):
-        df = year_data[folder]
-        return df[df["month"] == drill_month].drop(columns=["month"]) if not df.empty else pd.DataFrame()
+    st.caption("Single-month breakdown across all metrics.")
 
     c1, c2 = st.columns(2)
 
     with c1:
-        st.subheader("Avg Speed by Hour")
-        df = single_month("by_hour")
+        st.subheader("Speed by Hour of Day")
+        with st.spinner("Loading…"):
+            df = load_folder("by_hour", sel_year, months_to_load)
         if not df.empty:
-            st.line_chart(df.set_index("hour")["avg_speed"])
+            st.line_chart(df.groupby("hour")["avg_speed"].mean())
         else:
             st.info("No data.")
 
     with c2:
-        st.subheader("Avg Speed by Day of Week")
-        df = single_month("by_day_of_week")
+        st.subheader("Speed by Day of Week")
+        with st.spinner("Loading…"):
+            df = load_folder("by_day_of_week", sel_year, months_to_load)
         if not df.empty:
-            st.bar_chart(df.set_index("day_of_week")["avg_speed"])
+            st.bar_chart(df.groupby("day_of_week")["avg_speed"].mean())
         else:
             st.info("No data.")
 
@@ -220,26 +133,166 @@ else:
     c3, c4 = st.columns(2)
 
     with c3:
-        st.subheader("Avg Speed by Road Type (FRC)")
-        df = single_month("by_road_type")
+        st.subheader("Speed by Road Type (FRC)")
+        with st.spinner("Loading…"):
+            df = load_folder("by_road_type", sel_year, months_to_load)
         if not df.empty:
-            st.bar_chart(df.set_index("road_type")["avg_speed"])
+            st.bar_chart(df.groupby("road_type")["avg_speed"].mean())
         else:
             st.info("No data.")
 
     with c4:
-        st.subheader("Avg Speed by Direction")
-        df = single_month("by_direction")
+        st.subheader("Speed by Direction")
+        with st.spinner("Loading…"):
+            df = load_folder("by_direction", sel_year, months_to_load)
         if not df.empty:
-            st.bar_chart(df.set_index("direction")["avg_speed"])
+            st.bar_chart(df.groupby("direction")["avg_speed"].mean())
         else:
             st.info("No data.")
 
     st.divider()
-
     st.subheader("Top 20 Most Congested Segments")
-    df = single_month("top_segments")
+    with st.spinner("Loading…"):
+        df = load_folder("top_segments", sel_year, months_to_load)
     if not df.empty:
-        st.dataframe(df[["xd_id", "road-name", "bearing", "frc", "avg_congestion", "avg_speed"]], use_container_width=True)
+        display_df = (
+            df[["xd_id", "road-name", "bearing", "frc", "avg_congestion", "avg_speed"]]
+            .sort_values("avg_congestion", ascending=False)
+            .head(20)
+        )
+        st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No data.")
+
+# ===========================================================================
+# YEAR OVERVIEW: slideshow for the 4 metric charts + custom insights + segments
+# ===========================================================================
+
+else:
+    page_idx = st.session_state.page_idx
+    current_page = SLIDESHOW_PAGES[page_idx]
+
+    # --- Slideshow header with nav arrows ---
+    left, center, right = st.columns([1, 6, 1])
+
+    with left:
+        st.write("")  # vertical nudge
+        if page_idx > 0:
+            if st.button("←", use_container_width=True):
+                st.session_state.page_idx -= 1
+                st.rerun()
+
+    with center:
+        st.markdown(
+            f"<h2 style='text-align:center; margin:0'>{current_page['title']}</h2>"
+            f"<p style='text-align:center; color:gray; margin:4px 0 0 0'>"
+            f"{sel_year} Overview &nbsp;·&nbsp; {page_idx + 1} / {len(SLIDESHOW_PAGES)}</p>",
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        st.write("")
+        if page_idx < len(SLIDESHOW_PAGES) - 1:
+            if st.button("→", use_container_width=True):
+                st.session_state.page_idx += 1
+                st.rerun()
+
+    st.divider()
+
+    # --- Lazy-load ONLY the visible slide's folder ---
+    folder = current_page["key"]
+    page_type = current_page.get("type", "standard")
+    
+    with st.spinner(f"Loading {current_page['title']}…"):
+        df = load_folder(folder, sel_year, months_to_load)
+
+    if df.empty:
+        st.info("No data available for this view.")
+    else:
+        if page_type == "standard":
+            group_col = current_page["group_col"]
+            pivot = month_over_month(df, group_col)
+            
+            if not pivot.empty:
+                chart_fn = st.line_chart if group_col in ("hour", "direction") else st.bar_chart
+                chart_fn(pivot)
+                with st.expander("Month-over-month Δ speed"):
+                    deltas = delta_table(pivot).dropna()
+                    st.dataframe(
+                        deltas.style.background_gradient(cmap="RdYlGn", axis=None),
+                        use_container_width=True,
+                    )
+            else:
+                st.info("Not enough data to calculate month-over-month.")
+
+        elif page_type == "heatmap":
+            # --- Rush Hour Shift Heatmap ---
+            df["Month Name"] = df["month"].map(MONTH_LABELS)
+            
+            # Aggregate to get a clean mean per month/hour just in case
+            hm_df = df.groupby(["month", "Month Name", "hour"])["avg_congestion_score"].mean().reset_index()
+            
+            fig = px.density_heatmap(
+                hm_df, 
+                x="hour", 
+                y="Month Name", 
+                z="avg_congestion_score",
+                histfunc="avg", 
+                nbinsx=24,
+                color_continuous_scale="OrRd", 
+                labels={"hour": "Hour of Day", "Month Name": "Month", "avg_congestion_score": "Avg Congestion"}
+            )
+            
+            # Lock the Y-axis so months stay chronological top-to-bottom
+            ordered_months = [MONTH_LABELS[m] for m in range(1, 13)]
+            fig.update_yaxes(categoryorder="array", categoryarray=list(reversed(ordered_months)))
+            
+            # Lock X-axis to standard 24 hours
+            fig.update_xaxes(dtick=1)
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+        elif page_type == "seasonality":
+            # --- Weekend vs Weekday Seasonality ---
+            # PySpark dayofweek: 1 = Sunday, 7 = Saturday
+            df["Day Type"] = df["day_of_week"].apply(lambda x: "Weekend" if x in [1, 7] else "Weekday")
+            df["Month Name"] = df["month"].map(MONTH_LABELS)
+
+            seas_df = df.groupby(["month", "Month Name", "Day Type"])["avg_speed"].mean().reset_index()
+            seas_df = seas_df.sort_values("month")
+
+            fig = px.bar(
+                seas_df, 
+                x="Month Name", 
+                y="avg_speed", 
+                color="Day Type", 
+                barmode="group",
+                color_discrete_sequence=["#1f77b4", "#ff7f0e"],
+                labels={"avg_speed": "Average Speed", "Month Name": "Month", "Day Type": ""}
+            )
+            
+            # Ensure months display chronologically left to right
+            fig.update_xaxes(categoryorder="array", categoryarray=[MONTH_LABELS[m] for m in range(1, 13)])
+            fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- Congested segments always pinned below the slideshow ---
+    st.divider()
+    st.subheader("Most Congested Segments — Year Average")
+
+    with st.spinner("Loading segments…"):
+        seg_df = load_folder("top_segments", sel_year, months_to_load)
+
+    if not seg_df.empty:
+        summary = (
+            seg_df.groupby(["xd_id", "road-name", "frc"])
+            .agg(avg_congestion=("avg_congestion", "mean"), avg_speed=("avg_speed", "mean"))
+            .reset_index()
+            .sort_values("avg_congestion", ascending=False)
+            .head(20)
+        )
+        st.dataframe(summary, use_container_width=True)
+        st.caption("Averaged across all months in the selected year.")
+    else:
+        st.info("No segment data available.")
