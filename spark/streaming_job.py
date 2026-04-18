@@ -62,7 +62,7 @@ spark = (
 # WARN = quiet driver logs. INFO = Spark prints "Streaming query made progress" and
 # batch stats each micro-batch (no sink change; works with Parquet → S3).
 # Override: set SPARK_LOG_LEVEL=INFO in the environment (e.g. docker-compose).
-spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "WARN"))
+spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "INFO"))
 
 
 # =========================
