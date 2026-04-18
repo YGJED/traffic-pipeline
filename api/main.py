@@ -59,26 +59,32 @@ def snapshot_is_ready(bucket: str, prefix: str) -> bool:
 
 VALID_FOLDERS = {"by_hour", "by_day_of_week", "by_road_type", "by_direction", "top_segments"}
 
-def load_historical(folder: str, year: int, month: int) -> pd.DataFrame:
+def load_historical(folder: str, year: int, month: int | None = None) -> pd.DataFrame:
     """
-    Reads a date-partitioned Parquet folder from S3.
-    Path pattern: s3://<bucket>/historical/<folder>/year=<year>/month=<month>/
+    Reads yearly Parquet file from S3 and optionally filters by month.
+    Path: s3://<bucket>/historical/<folder>/year=<year>/
     """
-    prefix = f"{S3_HISTORICAL_PREFIX}/{folder}/year={year}/month={month}"
+    prefix = f"{S3_HISTORICAL_PREFIX}/{folder}/year={year}"
     fs = get_s3fs()
-    s3_path = f"{S3_BUCKET}/{prefix}"
+    s3_path = f"s3://{S3_BUCKET}/{prefix}"
 
     try:
-        # List parquet files under the partition prefix
-        files = fs.glob(f"{s3_path}/*.parquet")
-        if not files:
-            raise FileNotFoundError(f"No parquet files found at s3://{s3_path}")
-        return pd.read_parquet(f"s3://{files[0]}", filesystem=fs)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # Read the entire yearly dataset (single file)
+        df = pd.read_parquet(s3_path, filesystem=fs)
+
+        # Optional filtering by month
+        if month is not None:
+            df = df[df["month"] == month]
+
+        return df
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data found for year={year} in {folder}",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 # ---------------------------------------------------------------------------
 # Routes — live
 # ---------------------------------------------------------------------------
@@ -104,21 +110,15 @@ def get_live_segments():
 # ---------------------------------------------------------------------------
 
 @app.get("/historical/{folder}")
-def get_historical(folder: str, year: int, month: int):
-    """
-    Fetch a historical aggregation partition from S3.
-
-    Query params:
-      - year  (int) e.g. 2023
-      - month (int) 1-12
-
-    folder must be one of:
-      by_hour | by_day_of_week | by_road_type | by_direction | top_segments
-    """
+def get_historical(folder: str, year: int, month: int | None = None):
     if folder not in VALID_FOLDERS:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown folder '{folder}'. Valid options: {sorted(VALID_FOLDERS)}",
         )
+
+    if month is not None and (month < 1 or month > 12):
+        raise HTTPException(status_code=400, detail="month must be 1-12")
+
     df = load_historical(folder, year, month)
     return sanitize(df.to_dict(orient="records"))
