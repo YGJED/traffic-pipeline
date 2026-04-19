@@ -235,6 +235,28 @@ services:
             /app/spark_batch.py
 
   # -----------------------
+  # SPARK CONSOLIDATION JOB
+  #------------------------
+  spark-consolidate:
+    build: ./spark
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+    environment:
+      - HADOOP_USER_NAME=spark
+      - SPARK_LOG_LEVEL=INFO
+    env_file:
+      - .env
+    command: >
+      /opt/spark/bin/spark-submit
+            --master spark://spark-master:7077
+            --conf spark.jars.ivy=/tmp/.ivy2
+            --packages org.apache.hadoop:hadoop-aws:3.3.4
+            /app/spark_consolidate.py
+
+  # -----------------------
   # STREAMLIT DASHBOARD
   # -----------------------
   streamlit:

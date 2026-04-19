@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, hour, dayofweek, avg, year, month, row_number, broadcast
+from pyspark.sql.functions import col, hour, dayofweek, avg, year, month, row_number, lit, broadcast
 from pyspark.sql.window import Window
 
 import os
@@ -51,8 +51,8 @@ spark = (
     
     # Cluster Resource Control
     .config("spark.executor.instances", "3")    # Request 3 separate workers
-    .config("spark.executor.cores", "2")        # Each worker uses 2 cores
-    .config("spark.cores.max", "6")             # Cap total cluster usage at 6 cores
+    .config("spark.executor.cores", "1")        # 1 core/executor so each task gets full 2g
+    .config("spark.cores.max", "3")             # Cap total cluster usage at 3 cores
     .config("spark.executor.memory", "2g")      # 2GB RAM per worker
     .config("spark.driver.memory", "1g")
     
@@ -60,8 +60,6 @@ spark = (
     .getOrCreate()
 )
 
-
-# Suppress verbose Spark logs so we can see our output
 spark.sparkContext.setLogLevel("INFO")
 
 def process_year(year_num):
@@ -155,7 +153,7 @@ def process_year(year_num):
     df_by_segment.coalesce(1).write.mode("overwrite").parquet(f"{_hist}/top_segments/year={year_num}")
 
 def process_month(month_num, year_num):
-    print(f"Processing month {month_num}")
+    print(f"UPDATED Processing month {month_num}")
 
     df_inrix = spark.read.parquet(
         f's3a://{S3_BUCKET}/raw/year={year_num}/month={month_num}'
@@ -177,70 +175,54 @@ def process_month(month_num, year_num):
     df_joined = df_joined.cache()
     df_joined.count()
 
-    # Aggregation 1: Average speed by hour of day (0-23), grouped by year and month
-    df_by_hr = df_joined.groupBy(
-        year(col("measurement_tstamp")).alias("year"),
-        month(col("measurement_tstamp")).alias("month"),
+    _hist = HISTORICAL_S3A.rstrip("/")
+
+    df_joined.groupBy(
         hour(col("measurement_tstamp")).alias("hour")
     ).agg(
         avg("speed").alias("avg_speed"),
         avg("congestion_score").alias("avg_congestion_score")
-    ).orderBy("year", "month", "hour")
+    ).withColumn("year", lit(year_num)).withColumn("month", lit(month_num)
+    ).write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_hour")
 
-    # Aggregation 2: Average speed by day of week (1-7, where 1 is Sunday), grouped by year and month
-    df_by_day = df_joined.groupBy(
-        year(col("measurement_tstamp")).alias("year"),
-        month(col("measurement_tstamp")).alias("month"),
+    df_joined.groupBy(
         dayofweek(col("measurement_tstamp")).alias("day_of_week")
     ).agg(
         avg("speed").alias("avg_speed"),
         avg("congestion_score").alias("avg_congestion_score")
-    ).orderBy("year", "month", "day_of_week")
+    ).withColumn("year", lit(year_num)).withColumn("month", lit(month_num)
+    ).write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_day_of_week")
 
-    # Aggregation 3: Average congestion by road type (frc), grouped by year and month
-    df_by_road_type = df_joined.groupBy(
-        year(col("measurement_tstamp")).alias("year"),
-        month(col("measurement_tstamp")).alias("month"),
+    df_joined.groupBy(
         col("frc").alias("road_type")
     ).agg(
         avg("speed").alias("avg_speed"),
         avg("congestion_score").alias("avg_congestion_score")
-    ).orderBy("year", "month", "road_type")
+    ).withColumn("year", lit(year_num)).withColumn("month", lit(month_num)
+    ).write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_road_type")
 
-    # Aggregation 4: Average speed by direction (bearing), grouped by year and month
-    df_by_direction = df_joined.groupBy(
-        year(col("measurement_tstamp")).alias("year"),
-        month(col("measurement_tstamp")).alias("month"),
+    df_joined.groupBy(
         col("bearing").alias("direction")
     ).agg(
         avg("speed").alias("avg_speed"),
         avg("congestion_score").alias("avg_congestion_score")
-    ).orderBy("year", "month", "direction")
+    ).withColumn("year", lit(year_num)).withColumn("month", lit(month_num)
+    ).write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_direction")
 
-    # Aggregation 5: Worst segments overall (top 20), grouped by year and month
-    df_by_segment = df_joined.groupBy(
-        year(col("measurement_tstamp")).alias("year"),
-        month(col("measurement_tstamp")).alias("month"),
+    df_joined.groupBy(
         "xd_id", "road-name", "bearing", "frc"
     ).agg(
         avg("congestion_score").alias("avg_congestion"),
         avg("speed").alias("avg_speed")
-    ).orderBy("year", "month", col("avg_congestion").desc())
-    df_by_segment = df_by_segment.withColumn("rank", 
-        row_number().over(
-            Window.orderBy(col("avg_congestion").desc())
-        )
-    ).filter(col("rank") <= 20)
-
-    _hist = HISTORICAL_S3A.rstrip("/")
-    df_by_hr.write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_hour")
-    df_by_day.write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_day_of_week")
-    df_by_road_type.write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_road_type")
-    df_by_direction.write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/by_direction")
-    df_by_segment.write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/top_segments")
+    ).orderBy(col("avg_congestion").desc()).limit(20
+    ).withColumn("year", lit(year_num)).withColumn("month", lit(month_num)
+    ).write.mode("overwrite").partitionBy("year", "month").parquet(f"{_hist}/top_segments")
 
 YEAR = 2023
-process_year(YEAR)
+for m in range(1, 13):
+    print("Processing month ", m)
+    process_month(m, YEAR)
+    spark.catalog.clearCache()
 
-# Stop the Spark session
+
 spark.stop()

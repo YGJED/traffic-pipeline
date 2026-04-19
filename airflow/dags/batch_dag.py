@@ -1,13 +1,15 @@
 """Historical aggregations: run Spark batch against data already in S3.
 
-Manual DAG. Assumes preprocessing (or equivalent) has populated the bucket and
-that /opt/airflow/scripts/spark_batch.py matches the Spark image / deps you use elsewhere.
+Manual DAG. spark_batch processes all 12 months of 2023 in a single Spark
+job, then spark_consolidate merges each monthly parquet output into one
+file per aggregation type under year=2023 in S3.
 """
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from datetime import datetime
-from dotenv import dotenv_values
 
+REPO = "/opt/airflow/repo"
+COMPOSE = f"cd {REPO} && docker compose"
 
 with DAG(
     dag_id="batch_pipeline",
@@ -16,13 +18,25 @@ with DAG(
     schedule=None,
     catchup=False,
 ) as dag:
+
     run_spark_batch = BashOperator(
         task_id="run_spark_batch",
         bash_command=(
-            "cd /opt/***/repo && "
-            "docker compose down && "
-            # Add --scale spark-worker=3 (or 2)
-            "docker compose up --build --scale spark-worker=3 --exit-code-from spark-batch spark-batch && "
-            "docker compose down"
+            f"{COMPOSE} down && "
+            f"{COMPOSE} up --build --scale spark-worker=3 "
+            f"--exit-code-from spark-batch spark-batch && "
+            f"{COMPOSE} down"
         ),
-) 
+    )
+
+    consolidate_year = BashOperator(
+        task_id="consolidate_year",
+        bash_command=(
+            f"{COMPOSE} down && "
+            f"{COMPOSE} up --build --scale spark-worker=3 "
+            f"--exit-code-from spark-consolidate spark-consolidate && "
+            f"{COMPOSE} down"
+        ),
+    )
+
+    run_spark_batch >> consolidate_year
