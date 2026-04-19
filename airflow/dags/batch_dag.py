@@ -6,6 +6,8 @@ that /opt/airflow/scripts/spark_batch.py matches the Spark image / deps you use 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from datetime import datetime
+from dotenv import dotenv_values
+
 
 with DAG(
     dag_id="batch_pipeline",
@@ -14,8 +16,13 @@ with DAG(
     schedule=None,
     catchup=False,
 ) as dag:
-
     run_spark_batch = BashOperator(
         task_id="run_spark_batch",
-        bash_command="python /opt/airflow/scripts/spark_batch.py",
-    )
+        bash_command=(
+            "cd /opt/***/repo && "
+            "docker compose down && "
+            # Add --scale spark-worker=3 (or 2)
+            "docker compose up --build --scale spark-worker=3 --exit-code-from spark-batch spark-batch && "
+            "docker compose down"
+        ),
+) 

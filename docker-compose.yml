@@ -173,6 +173,8 @@ services:
     image: apache/spark:3.5.0
     depends_on:
       - spark-master
+    env_file:
+      - .env
     command: >
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
       --cores 2
@@ -218,19 +220,19 @@ services:
     environment:
       - HADOOP_USER_NAME=spark
       - SPARK_LOG_LEVEL=INFO
-    volumes:
-      - ./spark:/app
-      - ./.env:/app/.env
+    # volumes:
+    #   - ./spark:/app
+    #   - ./.env:/app/.env
+    env_file:
+      # Inject creds as env vars (no bind mount). Mounting ./.env into /app/.env breaks when
+      # compose runs from Airflow: the daemon may treat the source path as a dir or wrong type.
+      - .env
     command: >
       /opt/spark/bin/spark-submit
-      --master spark://spark-master:7077
-      --executor-memory 1g
-      --driver-memory 512m
-      --total-executor-cores 2
-      --conf spark.jars.ivy=/tmp/.ivy2
-      --packages org.apache.hadoop:hadoop-aws:3.3.4
-      /app/spark_batch.py
-
+            --master spark://spark-master:7077
+            --conf spark.jars.ivy=/tmp/.ivy2
+            --packages org.apache.hadoop:hadoop-aws:3.3.4
+            /app/spark_batch.py
 
   # -----------------------
   # STREAMLIT DASHBOARD
