@@ -144,7 +144,6 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    show_labels = st.toggle("Show speed labels on map", value=False)
 
 # Apply filters
 mask = (
