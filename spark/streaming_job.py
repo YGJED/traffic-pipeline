@@ -3,6 +3,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, from_json, avg, count, when, window,
     approx_count_distinct, current_timestamp, lit,
+    year, month, dayofmonth,
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType,
@@ -199,6 +200,9 @@ agg_by_segment = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
 
@@ -240,6 +244,9 @@ agg_network_pct = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
 
@@ -265,6 +272,9 @@ agg_by_road_type = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
 
@@ -280,7 +290,7 @@ agg_by_road_type = (
 def write_latest_snapshot(batch_df, batch_id):
     if batch_df.isEmpty():
         return
-
+    
     w = Window.partitionBy("xd_id").orderBy(col("window_start").desc())
 
     latest = (

@@ -66,10 +66,9 @@ def load_historical(folder: str, year: int, month: int | None = None) -> pd.Data
     """
     prefix = f"{S3_HISTORICAL_PREFIX}/{folder}/year={year}"
     fs = get_s3fs()
-    s3_path = f"s3://{S3_BUCKET}/{prefix}"
+    s3_path = f"{S3_BUCKET}/{prefix}"
 
     try:
-        # Read the entire yearly dataset (single file)
         df = pd.read_parquet(s3_path, filesystem=fs)
 
         # Optional filtering by month
@@ -84,6 +83,7 @@ def load_historical(folder: str, year: int, month: int | None = None) -> pd.Data
             detail=f"No data found for year={year} in {folder}",
         )
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 # ---------------------------------------------------------------------------
 # Routes — live

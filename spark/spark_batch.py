@@ -17,29 +17,6 @@ S3_BUCKET = os.getenv("S3_BUCKET","ndot-traffic-pipeline")
 # Curated aggregation outputs (S3 console: s3://ndot-traffic-pipeline/historical/...)
 HISTORICAL_S3A = f's3a://{S3_BUCKET}/historical'
 
-# spark = (
-#     SparkSession.builder
-#     .appName("traffic-batch")
-#     # .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4")
-#     .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY_ID)
-#     .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_ACCESS_KEY)
-#     .config("spark.hadoop.fs.s3a.session.token", AWS_SESSION_TOKEN)
-#     .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider")
-#     .config("spark.hadoop.fs.s3a.threads.keepalivetime", "60")
-#     .config("spark.hadoop.fs.s3a.connection.establish.timeout", "5000")
-#     .config("spark.hadoop.fs.s3a.connection.timeout", "60000")
-#     .config("spark.hadoop.fs.s3a.socket.timeout", "60000")
-#     .config("spark.hadoop.fs.s3a.multipart.purge.age", "86400")
-#     .config("spark.hadoop.fs.s3a.fast.upload.buffer", "bytebuffer")
-#     .config("spark.executor.memory", "1g")
-#     .config("spark.driver.memory", "1g")
-#     .config("spark.executor.cores", "6")
-#     .config("spark.cores.max", "6")
-#     .config("spark.executor.instances", "1")
-#     .config("spark.sql.sources.partitionOverwriteMode", "dynamic") \
-#     .getOrCreate()
-# )
-
 spark = (
     SparkSession.builder
     .appName("traffic-batch")

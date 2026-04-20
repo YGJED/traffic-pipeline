@@ -2,9 +2,7 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-import json
-from pathlib import Path
-import requests
+from streamlit_autorefresh import st_autorefresh
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app import fetch_live_segments
@@ -62,11 +60,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st_autorefresh(interval=30_000, key="live_autorefresh")
+
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
 
-df = fetch_live_segments()
+df, is_stale = fetch_live_segments()
+
+if df.empty or "road_name" not in df.columns:
+    st.warning("No data available. The data source may be unreachable or credentials may be misconfigured.")
+    st.stop()
+
+# if is_stale:
+#     st.info("Data source temporarily unavailable (snapshot refresh in progress). Showing last known data.")
 
 # Now use df for all filtering, mapping, and table display.
 # For example, to create a display_name:
@@ -152,10 +159,21 @@ filtered = df[mask].copy()
 # Header
 # ---------------------------------------------------------------------------
 
+from datetime import datetime, timezone
+
+data_ts = ""
+if "window_end" in df.columns and not df["window_end"].isna().all():
+    ts = pd.to_datetime(df["window_end"]).max()
+    data_ts = f"DATA AS OF {ts.strftime('%Y-%m-%d %H:%M')} UTC"
+
+refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
 st.markdown(f"""
 <div class="top-bar">
   <h1>🗺️ Davidson County Road Network</h1>
-  <span>XD SEGMENT VIEWER · {len(filtered):,} of {len(df):,} segments</span>
+  <br>
+  <span>{len(filtered):,} of {len(df):,} segments</span>
+  <span style="margin-left:auto">{data_ts} · REFRESHED {refreshed_at}</span>
 </div>
 """, unsafe_allow_html=True)
 

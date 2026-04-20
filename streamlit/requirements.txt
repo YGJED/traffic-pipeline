@@ -3,5 +3,6 @@ pandas==2.2.2
 plotly==5.22.0
 folium==0.17.0
 streamlit-folium==0.22.0
+streamlit-autorefresh
 requests
 matplotlib

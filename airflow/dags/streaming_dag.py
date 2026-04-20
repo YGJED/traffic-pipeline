@@ -102,7 +102,7 @@ with DAG(
                 --start-time 2023-01-01T00:00:00 \
                 --end-time 2023-01-01T05:00:00 \
                 --emit-mode verbose \
-                --slice-delay 1
+                --slice-delay 10
         """,
     )
 

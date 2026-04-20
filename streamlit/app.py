@@ -11,16 +11,25 @@ st.set_page_config(
  
 API_BASE = os.environ.get("API_BASE", "http://api:8000")
  
+_last_good_segments: pd.DataFrame = pd.DataFrame()
+
 @st.cache_data(ttl=30)
-def fetch_live_segments() -> pd.DataFrame:
-    """Fetch live segment data from the FastAPI backend.
-    Defined here so the cache is shared with the Live Map page,
-    which must import and call this same function."""
+def _fetch_live_segments_cached() -> pd.DataFrame:
     resp = requests.get(f"{API_BASE}/live/segments", timeout=15)
-    if resp.status_code == 503:
-        return pd.DataFrame()
     resp.raise_for_status()
     return pd.DataFrame(resp.json())
+
+def fetch_live_segments() -> tuple[pd.DataFrame, bool]:
+    """Returns (dataframe, is_stale). Errors bypass the cache and fall back
+    to the last successful result so transient overwrite windows don't blank the UI."""
+    global _last_good_segments
+    try:
+        df = _fetch_live_segments_cached()
+        if not df.empty:
+            _last_good_segments = df
+        return df, False
+    except Exception:
+        return _last_good_segments, not _last_good_segments.empty
  
 FOLDERS = ["by_hour", "by_day_of_week", "by_road_type", "by_direction", "top_segments"]
 
@@ -47,7 +56,7 @@ def preload_year(year: int):
 
 # Warm the cache silently while the user reads the welcome page.
 with st.spinner("Loading live traffic data…"):
-    fetch_live_segments()
+    fetch_live_segments()  # warms cache; return value unused on home page
 with st.spinner("Preparing historical analytics…"):
     preload_year(2023)  # <-- warms ALL historical datasets
 

@@ -251,25 +251,13 @@ python spark/spark_batch.py
 
 Use these commands from repo root.
 
-1. Build Airflow services:
+1. Start Airflow (postgres, init, scheduler, and webserver all start automatically):
 
 ```powershell
-docker compose build airflow-webserver airflow-scheduler airflow-init
+docker compose up -d airflow-webserver
 ```
 
-2. Start metadata DB and run init/migrations:
-
-```powershell
-docker compose up -d postgres airflow-init
-```
-
-3. Start webserver + scheduler:
-
-```powershell
-docker compose up -d airflow-webserver airflow-scheduler
-```
-
-4. Open Airflow UI:
+2. Open Airflow UI:
    - URL: [http://localhost:8080](http://localhost:8080)
    - Login: `admin` / `admin`
 

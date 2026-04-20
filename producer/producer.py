@@ -125,7 +125,7 @@ BUCKET_MINUTES = args.bucket_minutes
 # CONFIGURATION
 # =========================
 
-S3_BUCKET = "ndot-traffic-pipeline"
+S3_BUCKET = os.getenv("S3_BUCKET","ndot-traffic-pipeline")
 # Layout: raw/year=<year>/month=<month>/data.parquet
 
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "road-segments")
