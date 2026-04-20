@@ -225,13 +225,20 @@ else:
             df["Month Name"] = df["month"].map(MONTH_LABELS)
             hm_df = df.groupby(["month", "Month Name", "hour"])["avg_congestion_score"].mean().reset_index()
 
-            fig = px.density_heatmap(
-                hm_df,
-                x="hour",
-                y="Month Name",
-                z="avg_congestion_score",
-                color_continuous_scale="OrRd"
+            pivot = (
+                hm_df.pivot_table(index="month", columns="hour", values="avg_congestion_score")
+                .reindex(columns=range(24))
+                .sort_index()
             )
+            pivot.index = [MONTH_LABELS[m] for m in pivot.index]
+
+            fig = px.imshow(
+                pivot,
+                labels={"x": "Hour of Day", "y": "Month", "color": "Avg Congestion"},
+                color_continuous_scale="OrRd",
+                aspect="auto",
+            )
+            fig.update_xaxes(tickmode="linear", tick0=0, dtick=1)
             st.plotly_chart(fig, use_container_width=True)
 
         elif page_type == "seasonality":
