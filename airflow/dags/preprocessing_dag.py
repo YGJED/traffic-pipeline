@@ -17,19 +17,19 @@ with DAG(
     # Drop unwanted columns / rows per scripts/prune.py rules
     prune = BashOperator(
         task_id="prune",
-        bash_command="python /opt/airflow/scripts/prune.py",
+        bash_command="python -u /opt/airflow/scripts/prune.py",
     )
 
     # Merge or normalize Parquet layout before upload
     consolidate = BashOperator(
         task_id="consolidate",
-        bash_command="python /opt/airflow/scripts/consolidate_parquet.py",
+        bash_command="python -u /opt/airflow/scripts/consolidate_parquet.py",
     )
 
     # Push consolidated Parquet to the bucket paths the streaming/batch jobs expect
     upload = BashOperator(
         task_id="upload_to_s3",
-        bash_command="python /opt/airflow/scripts/upload_parquets.py",
+        bash_command="python -u /opt/airflow/scripts/upload_parquets.py",
     )
 
     prune >> consolidate >> upload

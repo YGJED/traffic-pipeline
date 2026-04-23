@@ -13,7 +13,10 @@ ENV/
 env.bak/
 venv.bak/
 
+airflow/logs/*
+
 # python artifacts
 **/__pycache__/
 
 *.log
+data/*

@@ -15,8 +15,6 @@ x-airflow-common: &airflow-common
     - .:/opt/airflow/repo
     - ./.env:/opt/airflow/.env
     - ./data:/opt/airflow/data
-    - ./inrix_historical_parquet:/opt/airflow/inrix_historical_parquet
-    - ./inrix_stream_parquet:/opt/airflow/inrix_stream_parquet
     - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:

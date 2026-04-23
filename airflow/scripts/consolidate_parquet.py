@@ -9,8 +9,8 @@ import pyarrow as pa
 
 # Directories to consolidate (will process both)
 TARGETS = [
-    "/opt/airflow/inrix_historical_parquet",
-    "/opt/airflow/inrix_stream_parquet",
+    "/opt/airflow/data/inrix_historical_parquet",
+    "/opt/airflow/data/inrix_stream_parquet",
 ]
 
 # Temp suffix used during rewrite to avoid clobbering originals mid-run
