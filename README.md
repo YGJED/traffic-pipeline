@@ -59,8 +59,6 @@ Required
   - `AWS_REGION`
   - `S3_BUCKET` (name of your S3 bucket, defaults to `ndot-traffic-pipeline` if not present)
 
-- Add 
-
 #### How to get the data
 The NRIX data set is available on [box here](https://vanderbilt.app.box.com/s/qbd90obb17kfc9w3m7bdq6s545x4a1wf). Only the `inrix_data/` folder is needed
 Preprocessing and creating the historical batch data can take a while, so we've uploaded the resulting parquet files to this [box folder here](https://vanderbilt.box.com/s/5hrcs8lih15m2pwmzu4oy0quhpzlq6m8)
@@ -87,7 +85,7 @@ To run the batch processing DAG, start airflow using the directions above and st
 4. **By direction** — average speed and congestion score per bearing, grouped by year and month
 5. **Top 20 worst segments** — the 20 road segments with the highest average congestion score, grouped by year and month
 
-This process takes the longest of any part of the project due to the sheer amount of data. It uses 3 Spark workers each with 1 core and 2 GB memory. To adjust this amount, go to [spark/spark_batch.py](spark/spark_batch.py) and modify the `spark.executor.instances`, `spark.executor.cores`, and `spark.executor.memory` configs. On my laptop it takes ~45 minutes to fully complete. Because of this, we've uploaded the files that are outputted by the batch processing to this Box link HERE
+This process takes the longest of any part of the project due to the sheer amount of data. It uses 3 Spark workers each with 1 core and 2 GB memory. To adjust this amount, go to [spark/spark_batch.py](spark/spark_batch.py) and modify the `spark.executor.instances`, `spark.executor.cores`, and `spark.executor.memory` configs. On my laptop it takes ~45 minutes to fully complete. Because of this, we've uploaded the files that are outputted by the batch processing to this [Box link HERE](https://vanderbilt.box.com/s/5hrcs8lih15m2pwmzu4oy0quhpzlq6m8)
 
 This uses the approach of going over each month and calculating the aggregations and then consolidating each month's aggregations into 1 parquet file/year. This ensures that 1. there is enough memory space for spark to do each aggregation and 2. There aren't tons of small files that all require a GET request from the frontend. It is better to spend more time having to do the consolidation than 12x-ing the number of API calls needed because the consolidation only needs to happen once compared to 12 extra calls for each aggregation every time the dashboard is loaded. 
 
