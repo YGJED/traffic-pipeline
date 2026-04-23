@@ -3,12 +3,15 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, from_json, avg, count, when, window,
     approx_count_distinct, current_timestamp, lit,
+    year, month, dayofmonth,
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType,
     DoubleType, LongType, TimestampType
 )
 from dotenv import load_dotenv
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number
 
 # =========================
 # LOAD ENVIRONMENT
@@ -23,16 +26,18 @@ AWS_SESSION_TOKEN     = os.getenv("AWS_SESSION_TOKEN")
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC     = os.getenv("KAFKA_TOPIC", "road-segments")
 
-S3_BUCKET = "ndot-traffic-pipeline"
+S3_BUCKET = os.getenv("S3_BUCKET", "ndot-traffic-pipeline")
 S3_LIVE   = f"s3a://{S3_BUCKET}/live"
 
 S3_BY_SEGMENT   = f"{S3_LIVE}/congestion_by_segment"
 S3_NETWORK_PCT  = f"{S3_LIVE}/network_congestion_pct"
 S3_BY_ROAD_TYPE = f"{S3_LIVE}/congestion_by_road_type"
+S3_LATEST_CONGESTION_BY_SEGMENT = f"{S3_LIVE}/latest_congestion_by_segment"
 
 CHECKPOINT_BY_SEGMENT   = f"{S3_LIVE}/checkpoints/by_segment"
 CHECKPOINT_NETWORK_PCT  = f"{S3_LIVE}/checkpoints/network_pct"
 CHECKPOINT_BY_ROAD_TYPE = f"{S3_LIVE}/checkpoints/by_road_type"
+CHECKPOINT_LATEST = f"{S3_LIVE}/checkpoints/latest_congestion_by_segment"
 
 # =========================
 # SPARK SESSION
@@ -108,7 +113,8 @@ parsed = (
 
 WINDOW_DURATION      = "60 minutes"
 SLIDE_DURATION       = "10 minutes"
-TRIGGER_INTERVAL     = "10 seconds"
+QUERY_TRIGGER_INTERVAL     = "2 minutes" # this is in real-time, needs to be matched up w/ the kafka producer speed
+SNAPSHOT_TRIGGER_INTERVAL = "20 seconds" # thjis is in real-time, needs to be matched up w/ the kafka producer speed
 CONGESTION_THRESHOLD = 0.3
 
 # =========================
@@ -157,6 +163,9 @@ xd_df = (
     )
 )
 
+xd_df = xd_df.cache()
+xd_df.count()  # materialize it once
+
 # =========================
 # JOIN STREAM WITH XD LOOKUP
 # =========================
@@ -176,18 +185,12 @@ enriched = (
 # Per 60-minute sliding window (10-minute slide): xd_id plus static XD lookup fields
 # (road_name, frc, endpoints, bearing). written_at is wall clock when emitted.
 
+# Aggregate on minimal keys only
 agg_by_segment = (
     enriched
     .groupBy(
         window(col("event_time"), WINDOW_DURATION, SLIDE_DURATION),
         col("xd_id"),
-        col("road_name"),
-        col("frc"),
-        col("start_lat"),
-        col("start_long"),
-        col("end_lat"),
-        col("end_long"),
-        col("bearing"),
     )
     .agg(
         avg("speed").alias("avg_speed"),
@@ -197,8 +200,19 @@ agg_by_segment = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
+
+# Rejoin static fields after aggregation
+agg_by_segment = (
+    agg_by_segment
+    .join(xd_df, agg_by_segment.xd_id == xd_df.xd, "left")
+    .drop("xd")
+)
+
 
 # =========================
 # AGGREGATION 2 — % of segments congested (KPI)
@@ -230,6 +244,9 @@ agg_network_pct = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
 
@@ -255,8 +272,41 @@ agg_by_road_type = (
     .withColumn("window_start", col("window.start"))
     .withColumn("window_end",   col("window.end"))
     .withColumn("written_at",   current_timestamp())
+    .withColumn("year",  year(col("window.start")))
+    .withColumn("month", month(col("window.start")))
+    .withColumn("day",   dayofmonth(col("window.start")))
     .drop("window")
 )
+
+# =========================
+# SNAPSHOT SINK — Latest reading per segment
+# =========================
+# foreachBatch receives the micro-batch DataFrame already aggregated by
+# agg_by_segment. Within that batch there may be multiple windows per
+# xd_id (sliding windows overlap). We keep only the row with the newest
+# window_start, then overwrite a single small Parquet prefix so FastAPI
+# and Streamlit always read a fixed-size snapshot instead of growing files.
+
+def write_latest_snapshot(batch_df, batch_id):
+    if batch_df.isEmpty():
+        return
+    
+    w = Window.partitionBy("xd_id").orderBy(col("window_start").desc())
+
+    latest = (
+        batch_df
+        .withColumn("rn", row_number().over(w))
+        .filter(col("rn") == 1)
+        .drop("rn")
+        .coalesce(1)
+    )
+    (
+        latest.write
+        .mode("overwrite")
+
+        .parquet(S3_LATEST_CONGESTION_BY_SEGMENT)
+    )
+
 
 # =========================
 # WRITE TO S3
@@ -269,7 +319,8 @@ query_by_segment = (
     .format("parquet")
     .option("path", S3_BY_SEGMENT)
     .option("checkpointLocation", CHECKPOINT_BY_SEGMENT)
-    .trigger(processingTime=TRIGGER_INTERVAL)
+    .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
     .start()
 )
 
@@ -280,7 +331,8 @@ query_network_pct = (
     .format("parquet")
     .option("path", S3_NETWORK_PCT)
     .option("checkpointLocation", CHECKPOINT_NETWORK_PCT)
-    .trigger(processingTime=TRIGGER_INTERVAL)
+    .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
     .start()
 )
 
@@ -291,7 +343,18 @@ query_by_road_type = (
     .format("parquet")
     .option("path", S3_BY_ROAD_TYPE)
     .option("checkpointLocation", CHECKPOINT_BY_ROAD_TYPE)
-    .trigger(processingTime=TRIGGER_INTERVAL)
+    .trigger(processingTime=QUERY_TRIGGER_INTERVAL)
+    .partitionBy("year", "month", "day")
+    .start()
+)
+
+query_latest_snapshot = (                                    
+    agg_by_segment
+    .writeStream
+    .outputMode("update")
+    .foreachBatch(write_latest_snapshot)
+    .option("checkpointLocation", CHECKPOINT_LATEST)
+    .trigger(processingTime=SNAPSHOT_TRIGGER_INTERVAL)
     .start()
 )
 

@@ -31,19 +31,7 @@ with DAG(
         task_id="start_kafka",
         bash_command="""
             cd /opt/airflow/repo &&
-            docker compose -p traffic-pipeline up -d zookeeper kafka &&
-            MAX_TRIES=40 &&
-            TRIES=0 &&
-            until docker compose -p traffic-pipeline exec kafka kafka-topics \
-                --bootstrap-server localhost:9092 --list; do
-                TRIES=$((TRIES + 1))
-                if [ "$TRIES" -ge "$MAX_TRIES" ]; then
-                    echo "Timeout waiting for Kafka to be ready"
-                    exit 1
-                fi
-                echo "Waiting for Kafka..."
-                sleep 3
-            done
+            docker compose -p traffic-pipeline up -d --wait zookeeper kafka &&
             echo "Kafka is ready"
         """,
     )
@@ -97,12 +85,12 @@ with DAG(
         task_id="run_producer",
         bash_command="""
             cd /opt/airflow/repo &&
-            docker compose -p traffic-pipeline up -d --build producer-app &&
-            docker compose -p traffic-pipeline exec producer-app python producer.py \
+            docker compose -p traffic-pipeline build producer-app &&
+            docker compose -p traffic-pipeline run --rm producer-app python producer.py \
                 --start-time 2023-01-01T00:00:00 \
                 --end-time 2023-01-01T05:00:00 \
                 --emit-mode verbose \
-                --slice-delay 1
+                --slice-delay 10
         """,
     )
 

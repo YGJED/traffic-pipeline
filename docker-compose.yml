@@ -15,8 +15,6 @@ x-airflow-common: &airflow-common
     - .:/opt/airflow/repo
     - ./.env:/opt/airflow/.env
     - ./data:/opt/airflow/data
-    - ./inrix_historical_parquet:/opt/airflow/inrix_historical_parquet
-    - ./inrix_stream_parquet:/opt/airflow/inrix_stream_parquet
     - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:
@@ -31,6 +29,12 @@ services:
     image: confluentinc/cp-zookeeper:7.6.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   # -----------------------
   # KAFKA
@@ -38,7 +42,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -56,14 +61,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
-
+      
   # -----------------------
   # PRODUCER CONTAINER
   # -----------------------
   producer-app:
     build: ./producer
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     env_file:
       # Inject creds as env vars (no bind mount). Mounting ./.env into /app/.env breaks when
       # compose runs from Airflow: the daemon may treat the source path as a dir or wrong type.
@@ -77,21 +83,21 @@ services:
   # -----------------------
   # KAFKA CONSUMER FOR TESTING
   # -----------------------
-  kafka-consumer:
-    build: ./producer
-    depends_on:
-      kafka:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      - KAFKA_BOOTSTRAP=kafka:9092
-      - KAFKA_TOPIC=road-segments
-    volumes:
-      # Local/dev helper service: keep bind mount for quick consumer.py edits from host.
-      # (Unlike producer-app, this service is not used by Airflow DAG orchestration.)
-      - ./producer:/app
-    command: python consumer.py --bootstrap kafka:9092 --topic road-segments
+  # kafka-consumer:
+  #   build: ./producer
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - KAFKA_BOOTSTRAP=kafka:9092
+  #     - KAFKA_TOPIC=road-segments
+  #   volumes:
+  #     # Local/dev helper service: keep bind mount for quick consumer.py edits from host.
+  #     # (Unlike producer-app, this service is not used by Airflow DAG orchestration.)
+  #     - ./producer:/app
+  #   command: python consumer.py --bootstrap kafka:9092 --topic road-segments
 
   # -----------------------
   # POSTGRES (Airflow metadata DB)
@@ -126,7 +132,10 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-scheduler:
+        condition: service_started
     restart: always
 
   # -----------------------
@@ -136,7 +145,8 @@ services:
     <<: *airflow-common
     command: scheduler
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
     restart: always
 
   # -----------------------
@@ -160,8 +170,12 @@ services:
     image: apache/spark:3.5.0
     depends_on:
       - spark-master
+    env_file:
+      - .env
     command: >
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      --cores 2
+      --memory 2g
       spark://spark-master:7077
 
   # -----------------------
@@ -189,6 +203,56 @@ services:
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4
       /app/streaming_job.py
 
+
+  # -----------------------
+  # SPARK BATCH JOB (TEMP)
+  #------------------------
+  spark-batch:
+    build: ./spark
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+    environment:
+      - HADOOP_USER_NAME=spark
+      - SPARK_LOG_LEVEL=INFO
+    # volumes:
+    #   - ./spark:/app
+    #   - ./.env:/app/.env
+    env_file:
+      # Inject creds as env vars (no bind mount). Mounting ./.env into /app/.env breaks when
+      # compose runs from Airflow: the daemon may treat the source path as a dir or wrong type.
+      - .env
+    command: >
+      /opt/spark/bin/spark-submit
+            --master spark://spark-master:7077
+            --conf spark.jars.ivy=/tmp/.ivy2
+            --packages org.apache.hadoop:hadoop-aws:3.3.4
+            /app/spark_batch.py
+
+  # -----------------------
+  # SPARK CONSOLIDATION JOB
+  #------------------------
+  spark-consolidate:
+    build: ./spark
+    depends_on:
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+    environment:
+      - HADOOP_USER_NAME=spark
+      - SPARK_LOG_LEVEL=INFO
+    env_file:
+      - .env
+    command: >
+      /opt/spark/bin/spark-submit
+            --master spark://spark-master:7077
+            --conf spark.jars.ivy=/tmp/.ivy2
+            --packages org.apache.hadoop:hadoop-aws:3.3.4
+            /app/spark_consolidate.py
+
   # -----------------------
   # STREAMLIT DASHBOARD
   # -----------------------
@@ -196,8 +260,17 @@ services:
     build: ./streamlit
     ports:
       - "8501:8501"
-    depends_on:
-      - kafka
     volumes:
       - ./streamlit:/app
     command: streamlit run app.py --server.address=0.0.0.0
+
+  # -----------------------
+  # FASTAPI API
+  # -----------------------
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app
+      - ./.env:/app/.env

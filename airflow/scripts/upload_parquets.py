@@ -8,7 +8,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv("/opt/airflow/.env")
 s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
 
-BUCKET = "ndot-traffic-pipeline"
+S3_BUCKET = os.getenv("S3_BUCKET", "ndot-traffic-pipeline")
 S3_PREFIX = "raw/year=2023"
 
 def upload_parquet_structure(local_root, s3_prefix):
@@ -28,15 +28,15 @@ def upload_parquet_structure(local_root, s3_prefix):
 
                 s3_key = f"{s3_prefix}/month={month}/data.parquet"
 
-                print(f"Uploading {local_path} -> s3://{BUCKET}/{s3_key}")
-                s3.upload_file(local_path, BUCKET, s3_key)
+                print(f"Uploading {local_path} -> s3://{S3_BUCKET}/{s3_key}")
+                s3.upload_file(local_path, S3_BUCKET, s3_key)
 
 
 def upload_all():
     # Before, only the historical parquet tree was pushed to S3, so raw/year=2023 had
     # Jan–May but not the stream months. Run the same upload for both local roots.
-    upload_parquet_structure("/opt/airflow/inrix_historical_parquet/year=2023", S3_PREFIX)
-    upload_parquet_structure("/opt/airflow/inrix_stream_parquet/year=2023", S3_PREFIX)
+    upload_parquet_structure("/opt/airflow/data/inrix_historical_parquet/year=2023", S3_PREFIX)
+    upload_parquet_structure("/opt/airflow/data/inrix_stream_parquet/year=2023", S3_PREFIX)
     print("Upload complete.")
 
 # run it

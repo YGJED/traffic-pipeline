@@ -7,18 +7,18 @@ import os
 # CONFIG
 # =========================
 
-INPUT_CSV = "/opt/airflow/data/Davidson-2023-2024-for-NDOT-10-min-Ave/Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
-HIST_OUTPUT_DIR = "/opt/airflow/inrix_historical_parquet"
-STREAM_OUTPUT_DIR = "/opt/airflow/inrix_stream_parquet"
+INPUT_CSV = "/opt/airflow/data/Davidson-2023-2024-for-NDOT-10-min-Ave.csv"
+HIST_OUTPUT_DIR = "/opt/airflow/data/inrix_historical_parquet"
+STREAM_OUTPUT_DIR = "/opt/airflow/data/inrix_stream_parquet"
 
 CHUNK_SIZE = 1_000_000  # adjust based on memory
 
 # Date ranges
 HIST_START = "2023-01-01"
-HIST_END   = "2023-05-31"
+HIST_END   = "2023-01-05"
 
-STREAM_START = "2023-06-01"
-STREAM_END   = "2023-12-31"
+STREAM_START = "2023-01-06"
+STREAM_END   = "2023-01-07"
 
 # Columns to keep
 COLUMNS = [
