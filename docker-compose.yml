@@ -44,7 +44,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -133,8 +134,10 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - airflow-init
-      - airflow-scheduler
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-scheduler:
+        condition: service_started
     restart: always
 
   # -----------------------
@@ -144,7 +147,8 @@ services:
     <<: *airflow-common
     command: scheduler
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
     restart: always
 
   # -----------------------

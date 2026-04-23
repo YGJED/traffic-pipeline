@@ -60,7 +60,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st_autorefresh(interval=30_000, key="live_autorefresh")
+st_autorefresh(interval=10_000, key="live_autorefresh")
 
 # ---------------------------------------------------------------------------
 # Load data

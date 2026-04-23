@@ -1,11 +1,7 @@
 import streamlit as st
 import pandas as pd
-import requests
-import os
 import plotly.express as px
 from app import preload_year
-
-API_BASE = os.environ.get("API_BASE", "http://api:8000")
 
 MONTH_LABELS = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
@@ -19,33 +15,9 @@ SLIDESHOW_PAGES = [
     {"key": "by_direction",   "title": "Speed by Direction",    "group_col": "direction", "type": "standard"},
 ]
 
-FOLDERS = ["by_hour", "by_day_of_week", "by_road_type", "by_direction", "top_segments"]
-
 # ---------------------------------------------------------------------------
 # Data loading (YEAR-LEVEL ONLY)
 # ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=600)
-def fetch_folder_year(folder: str, year: int) -> pd.DataFrame:
-    try:
-        res = requests.get(
-            f"{API_BASE}/historical/{folder}",
-            params={"year": year},
-            timeout=5,
-        )
-        if res.status_code == 200:
-            data = res.json()
-            if data:
-                return pd.DataFrame(data)
-    except requests.exceptions.RequestException:
-        pass
-    return pd.DataFrame()
-
-
-@st.cache_data(ttl=600)
-def preload_year(year: int):
-    return {f: fetch_folder_year(f, year) for f in FOLDERS}
-
 
 def load_folder(data_cache, folder: str, months: list[int]) -> pd.DataFrame:
     df = data_cache.get(folder, pd.DataFrame())

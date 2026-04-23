@@ -6,10 +6,18 @@ import os
 import s3fs
 import numpy as np
 import math
+import threading
+import time
+from typing import Any
 
 load_dotenv("/app/.env")
 
 app = FastAPI(title="Traffic Pipeline API", description="API for traffic data")
+
+LIVE_REFRESH_INTERVAL = int(os.getenv("LIVE_REFRESH_INTERVAL", "2"))
+
+_live_cache: list[dict[str, Any]] | None = None
+_live_cache_lock = threading.Lock()
 
 S3_BUCKET = os.getenv("S3_BUCKET", "ndot-traffic-pipeline")
 S3_LIVE_PREFIX = "live/latest_congestion_by_segment/"
@@ -24,6 +32,8 @@ def get_s3fs():
         key=os.getenv("AWS_ACCESS_KEY_ID"),
         secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
         token=os.getenv("AWS_SESSION_TOKEN"),
+        skip_instance_cache=True,
+        use_listings_cache=False,
     )
 
 def get_boto3_client():
@@ -93,17 +103,38 @@ def load_historical(folder: str, year: int, month: int | None = None) -> pd.Data
 def root():
     return {"message": "Traffic Pipeline API"}
 
+def _refresh_live_cache():
+    global _live_cache
+    while True:
+        if snapshot_is_ready(S3_BUCKET, S3_LIVE_PREFIX):
+            try:
+                print("Attemping to update cache")
+                fs = get_s3fs()
+                df = pd.read_parquet(f"{S3_BUCKET}/{S3_LIVE_PREFIX}", filesystem=fs)
+                records = sanitize(df.to_dict(orient="records"))
+                # print("updated records")
+                with _live_cache_lock:
+                    _live_cache = records
+            except Exception as e:
+                print(f"Live cache refresh failed: {e}")
+        time.sleep(LIVE_REFRESH_INTERVAL)
+
+
+@app.on_event("startup")
+def start_live_refresh():
+    t = threading.Thread(target=_refresh_live_cache, daemon=True)
+    t.start()
+
+
 @app.get("/live/segments")
 def get_live_segments():
-    if not snapshot_is_ready(S3_BUCKET, S3_LIVE_PREFIX):
-        raise HTTPException(status_code=503, detail="Snapshot not ready yet")
+    with _live_cache_lock:
+        data = _live_cache
 
-    try:
-        fs = get_s3fs()
-        df = pd.read_parquet(f"{S3_BUCKET}/{S3_LIVE_PREFIX}", filesystem=fs)
-        return sanitize(df.to_dict(orient="records"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if data is not None:
+        return data
+
+    raise HTTPException(status_code=503, detail="Snapshot not ready yet")
 
 # ---------------------------------------------------------------------------
 # Routes — historical aggregations
